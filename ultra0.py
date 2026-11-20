@@ -250,8 +250,10 @@ def read_purchase_token(sku_short: str) -> str:
                 alive = int(valid) > now_ms
             except Exception:
                 alive = False
-            # Ưu tiên lấy cái «chưa hết hạn»; khi nhiều tài khoản đều đang hoạt động thì lấy cái có thời gian hết hạn muộn nhất
-            if picked is None or (alive and not picked[2]) or (alive == picked[2] and int(valid or 0) > picked[3]):
+            if not alive:
+                continue
+            # Chỉ lấy gói «chưa hết hạn»; khi nhiều tài khoản đều đang hoạt động thì lấy cái có thời gian hết hạn muộn nhất
+            if picked is None or int(valid or 0) > picked[3]:
                 picked = (tk, account, alive, int(valid or 0))
         if picked:
             tok = picked[0]
@@ -267,8 +269,11 @@ def read_purchase_token(sku_short: str) -> str:
     return tok
 
 
-def ensure_vending():
+def ensure_vending(restart: bool = False):
     """BillingClient cần tiến trình Cửa hàng Play đang chạy, nếu không queryProductDetails sẽ không bao giờ gọi lại."""
+    if restart:
+        sh("shell", f"am force-stop {VENDING}")
+        time.sleep(1)
     if sh("shell", f"pidof {VENDING}"):
         ok("Tiến trình Cửa hàng Play đang chạy")
         return
@@ -308,8 +313,11 @@ def ensure_network():
 
 # ---------- UI ----------
 def ui_xml() -> str:
-    sh("shell", "uiautomator dump /sdcard/ui.xml")
-    return sh("shell", "cat /sdcard/ui.xml")
+    try:
+        sh("shell", "rm -f /sdcard/ui.xml && uiautomator dump --compressed /sdcard/ui.xml >/dev/null 2>&1", timeout=12)
+        return sh("shell", "cat /sdcard/ui.xml 2>/dev/null", timeout=10)
+    except Exception:
+        return ""
 
 
 def nodes(xml: str):
@@ -570,12 +578,12 @@ def build_js(plan: str = "auto", list_only: bool = False, stack: bool = False, o
     return js
 
 
-def run_trial(pid: int, wait=90, plan="auto", list_only=False, stack=False, old_token="", stack_mode=None) -> dict:
+def run_trial(pid: int, wait=25, plan="auto", list_only=False, stack=False, old_token="", stack_mode=None, password="") -> dict:
     import frida
     step("Đang inject module thanh toán, tra dùng thử miễn phí")
     dev = frida.get_usb_device(timeout=10)
     sess = dev.attach(pid)
-    res = {"offers": [], "launched": None, "purchase": None, "errors": []}
+    res = {"offers": [], "launched": None, "purchase": None, "errors": [], "list_done": False}
 
     def on_msg(m, _):
         p = m.get("payload") or {}
@@ -584,18 +592,37 @@ def run_trial(pid: int, wait=90, plan="auto", list_only=False, stack=False, old_
             res["offers"].append(p)
             note(f"offer {p.get('id')} → {p.get('micros')} ({p.get('p0','')})")
             note(f"    token={p.get('token','')}")
+        elif ev == "list_only":
+            res["list_done"] = True
         elif ev == "launched":
             res["launched"] = p
             ok(f"Đã mở trang thanh toán:{p}")
         elif ev == "purchase_cb":
             res["purchase"] = p
+            note(f"Callback thanh toán:{p}")
         elif ev and ("err" in ev or ev.startswith("no_")):
             res["errors"].append(p)
 
-    sc = sess.create_script(build_js(plan, list_only, stack, old_token, stack_mode))
-    sc.on("message", on_msg)
-    sc.load()
-    time.sleep(wait)
+    try:
+        sc = sess.create_script(build_js(plan, list_only, stack, old_token, stack_mode))
+        sc.on("message", on_msg)
+        sc.load()
+        end_t = time.time() + wait
+        while time.time() < end_t:
+            if list_only and res["list_done"]:
+                break
+            if not list_only and res["launched"] is not None:
+                break
+            if any(e.get("ev") in ("no_trial", "boot_err", "query_err", "launch_err", "launch_outer_err", "no_activity", "boot_fail") for e in res["errors"]):
+                break
+            time.sleep(0.3)
+        if not list_only and res["launched"] and res["launched"].get("code") == 0:
+            res["sheet"] = confirm_zero(password=password, frida_res=res)
+    finally:
+        try:
+            sess.detach()
+        except Exception:
+            pass
     return res
 
 
@@ -604,58 +631,142 @@ def handle_verify(password="") -> bool:
     changed = False
     for _ in range(12):
         blob = " ".join(n["text"] for n in nodes(ui_xml()) if n["text"])
-        if "Để sau" in blob or "以后再说" in blob or "Điểm Play" in blob or "Play 积分" in blob:
-            tap_text("Để sau", "以后再说", "Not now"); time.sleep(2); changed = True; continue
+        if "Để sau" in blob or "以后再说" in blob or "Điểm Play" in blob or "Play 积分" in blob or "Not now" in blob or "No thanks" in blob:
+            tap_text("Để sau", "以后再说", "Not now", "No thanks"); time.sleep(2); changed = True; continue
         if ("Xác minh" in blob or "验证" in blob or "Verify" in blob) and password:
             es = [n for n in nodes(ui_xml()) if "EditText" in n["cls"]]
             if es:
                 tap(es[0]["x"], es[0]["y"]); time.sleep(0.8)
-                slow_type(password, 0.1); time.sleep(0.8)
+                type_text(password); time.sleep(0.8)
                 tap_text("Xác minh", "验证", "Verify"); time.sleep(6); changed = True; continue
         break
     return changed
 
 
-def confirm_zero(wait=40, password="") -> dict:
-    step("Kiểm tra số tiền ở trang thanh toán (chỉ xác nhận khi là 0 đồng)")
-    out = {"price": None, "confirmed": False, "ineligible": False, "text": ""}
-    for _ in range(wait // 2):
-        xml = ui_xml()
-        text = " ".join(n["text"] for n in nodes(xml) if n["text"])
-        if "không đủ điều kiện dùng thử miễn phí" in text.lower() or "不符合免费试用条件" in text or "not eligible" in text.lower():
-            warn("Play báo: tài khoản này không đủ điều kiện dùng thử miễn phí")
-            if tap_text("Đã hiểu", "知道了", "OK", "Got it"):
-                time.sleep(2)
-            out["ineligible"] = True
-            return out
-        if ("Đăng ký" in text or "订阅" in text or "Subscribe" in text) and ("Ultra" in text or "AI" in text):
-            out["text"] = text[:300]
-            m = re.search(r"(US\$|HK\$|NT\$|\$|€|£)\s?([\d.,]+)", text)
-            if m:
-                out["price"] = m.group(0)
-                try:
-                    if float(m.group(2).replace(",", "")) == 0:
-                        tap_text("Đăng ký", "订阅", "Subscribe")
-                        out["confirmed"] = True
-                        ok("Đã xác nhận đăng ký 0 đồng")
-                        return out
-                except Exception:
-                    pass
-                warn(f"Số tiền hiện tại là {m.group(0)}, không phải 0 đồng, không bấm xác nhận")
-                return out
-            if ("không đủ điều kiện dùng thử miễn phí" in text.lower()) or ("不符合免费试用条件" in text) or ("not eligible" in text.lower()):
-                out["ineligible"] = True
-                warn("Play: tài khoản này không đủ điều kiện dùng thử miễn phí, không bấm xác nhận")
-                tap_text("Đóng", "Hủy", "关闭", "取消", "Close"); return out
-            if (re.search(r"(US\$|HK\$|NT\$|\$)\s?0(\.00)?\b", text)
-                    or "US$0/tháng" in text or "US$0/月" in text or "US$0.00" in text
-                    or re.search(r"Dùng thử miễn phí\s*\d+\s*(tháng|năm|mo|month)", text) or re.search(r"免费试用\s*\d+\s*(个月|年|mo|month)", text)):
-                tap_text("Đăng ký", "订阅", "Subscribe")
+ERROR_KEYWORDS = (
+    "not available for purchase",
+    "không đủ điều kiện dùng thử miễn phí",
+    "not eligible",
+    "already subscribed",
+    "bạn đã đăng ký",
+    "something went wrong",
+    "đã xảy ra lỗi",
+    "couldn't complete",
+    "không thể hoàn tất",
+    "transaction declined",
+    "giao dịch bị từ chối",
+    "không có sẵn để mua",
+)
+DISMISS_BTNS = ("Got it", "Đã hiểu", "OK", "Đóng", "Close", "知道了", "Hủy", "Cancel", "取消", "关闭")
+SUBSCRIBE_BTNS = ("Subscribe", "Đăng ký", "订阅", "1-tap buy", "Mua với 1 nhấn")
+
+
+def _tap_button(ns: list, labels: tuple) -> bool:
+    for n in ns:
+        t = (n["text"] or n["desc"]).strip()
+        if t in labels and (n["x"] or n["y"]):
+            tap(n["x"], n["y"])
+            return True
+    return False
+
+
+def confirm_zero(wait=45, password="", frida_res=None) -> dict:
+    step("Chờ Module thanh toán hiện lên để ấn Subscribe & kiểm tra kết quả")
+    out = {"price": None, "confirmed": False, "ineligible": False, "success": False, "error": "", "text": ""}
+    end_t = time.time() + wait
+    tapped_at = 0.0
+    while time.time() < end_t:
+        if frida_res and frida_res.get("purchase"):
+            cb = frida_res["purchase"]
+            code = cb.get("code")
+            if code == 0:
                 out["confirmed"] = True
-                ok("Đã xác nhận dùng thử miễn phí")
+                out["success"] = True
+                ok("Đăng ký thành công (Play Billing callback code=0 — Successful)!")
                 return out
-        time.sleep(2)
-    warn("Không phát hiện trang thanh toán (có thể tài khoản này đã đăng ký rồi)")
+            elif out["confirmed"] and code is not None:
+                out["error"] = f"Play Billing code={code}: {cb.get('msg', '')}"
+                warn(f"Giao dịch thất bại ({out['error']}), dừng bước hiện tại")
+                return out
+
+        xml = ui_xml()
+        if not xml:
+            time.sleep(1.5)
+            continue
+        ns = list(nodes(xml))
+        texts = [n["text"].strip() for n in ns if n["text"].strip()]
+        text = " ".join(texts)
+        low = text.lower()
+        if text:
+            out["text"] = text[:300]
+
+        # 1. Phát hiện hộp thoại Error / không đủ điều kiện (trước hoặc sau khi ấn Subscribe)
+        has_err_title = any(t in ("Error", "Lỗi", "错误") for t in texts)
+        has_err_kw = any(k in low for k in ERROR_KEYWORDS) or ("不符合免费试用条件" in text)
+        if has_err_title or has_err_kw:
+            err_msg = text[:200]
+            warn(f"Xuất hiện hộp thoại Error: {err_msg}")
+            if _tap_button(ns, DISMISS_BTNS):
+                time.sleep(1)
+            out["ineligible"] = True
+            out["error"] = err_msg
+            out["success"] = False
+            return out
+
+        # 2. Nếu đã ấn Subscribe, kiểm tra thông báo thành công hoặc xác minh mật khẩu
+        if out["confirmed"]:
+            if any(k in low for k in ("subscribed", "đã đăng ký", "payment successful", "thanh toán thành công", "manage subscription", "quản lý gói đăng ký", "play points", "điểm play")) or ("已订阅" in text):
+                _tap_button(ns, ("No thanks", "Not now", "Để sau", "以后再说", "Got it", "OK", "Đã hiểu"))
+                out["success"] = True
+                ok("Đã đăng ký thành công (Successful)!")
+                return out
+            if ("xác minh" in low or "verify" in low or "验证" in text) and password:
+                handle_verify(password)
+                continue
+            # Nếu bảng Play Billing đã tự đóng sau khi ấn Subscribe (>4s) và không có lỗi
+            if "com.android.vending" not in xml and (time.time() - tapped_at) > 4.0:
+                tok = read_purchase_token("subs_variant")
+                if tok:
+                    out["success"] = True
+                    ok("Đã xác nhận gói đăng ký mới trong Play (Successful)!")
+                    return out
+
+        # 3. Tìm đúng nút Subscribe trên Module thanh toán (tránh nhầm dòng điều khoản dịch vụ)
+        sub_btn = next(
+            (n for n in ns if n["text"].strip() in SUBSCRIBE_BTNS and ("Button" in n["cls"] or n["y"] > 2250)),
+            None,
+        )
+        if sub_btn:
+            if "1-month free trial" in low or "dùng thử miễn phí 1 tháng" in low:
+                warn("Trang thanh toán chỉ hiện dùng thử 1 tháng, hủy để tránh trừ tiền")
+                out["error"] = "1_month_trial_only"
+                return out
+            is_free_trial = (
+                "free trial" in low
+                or "dùng thử miễn phí" in low
+                or "免费试用" in text
+                or bool(re.search(r"(?:US\$|HK\$|NT\$|JP¥|¥|₫|\$|€|£)\s*0(?:[.,]00)?\b", text))
+                or bool(re.search(r"\b0\s*(?:₫|đ|đồng)\b", low))
+                or bool(re.search(r"\b\d+\s*(?:days|ngày|天)\b", low))
+            )
+            if not is_free_trial:
+                m = re.search(r"(US\$|HK\$|NT\$|JP¥|¥|₫|\$|€|£)\s?([\d.,]+)", text)
+                if m and "starting today" not in low:
+                    warn(f"Số tiền hiện tại là {m.group(0)} và không thấy dòng dùng thử 0 đồng, không bấm Subscribe")
+                    out["price"] = m.group(0)
+                    out["error"] = f"non_zero_price:{m.group(0)}"
+                    return out
+            note(f"Module thanh toán đã hiện → Ấn '{sub_btn['text'].strip()}' tại ({sub_btn['x']}, {sub_btn['y']})")
+            tap(sub_btn["x"], sub_btn["y"])
+            out["confirmed"] = True
+            if not tapped_at:
+                tapped_at = time.time()
+            time.sleep(2.5)
+            continue
+
+        time.sleep(1.5)
+    warn("Quá thời gian chờ tại trang thanh toán")
+    out["error"] = out["error"] or "timeout"
     return out
 
 
@@ -665,17 +776,17 @@ def verify() -> str:
                 f"-d 'https://play.google.com/store/account/subscriptions'")
     time.sleep(9)
     text = " | ".join(n["text"] for n in nodes(ui_xml()) if n["text"])
-    if "Ultra" in text:
-        ok("Trang đăng ký đã hiển thị Ultra")
+    if "Ultra" in text or "AI Pro" in text or "Google One" in text:
+        ok("Trang đăng ký đã hiển thị gói đăng ký")
     return text[:500]
 
 
 # ---------- Quy trình 1 tài khoản ----------
 def process(email, password="", totp_secret="", add=True, card=None, plan="auto", no_switch=False, list_only=False, stack=False, old_token="", stack_mode=None) -> dict:
     print("\n" + "=" * 56)
-    print(f"  Đang xử lý tài khoản:{email}")
+    print(f"  Đang xử lý tài khoản:{email} (plan={plan}, stack={stack})")
     print("=" * 56)
-    rec = {"email": email, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "status": "unknown"}
+    rec = {"email": email, "plan": plan, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "status": "unknown"}
     if add:
         try:
             if not add_account(email, password, totp_secret):
@@ -711,21 +822,33 @@ def process(email, password="", totp_secret="", add=True, card=None, plan="auto"
         if old_token:
             ok(f"Đã đọc được purchaseToken ({old_token[:16]}…), sẽ cộng dồn bằng chế độ nâng cấp gói đăng ký")
         else:
-            warn("Không đọc được purchaseToken, sẽ quay lại cách queryPurchases (có thể không lấy được)")
+            warn("Chưa có purchaseToken đang hoạt động, sẽ thử đăng ký gói mới")
 
+    if not list_only:
+        ensure_vending(restart=True)
     pid = launch_app()
     if not pid:
         rec["status"] = "app_not_started"
         return rec
-    fr = run_trial(pid, plan=plan, list_only=list_only, stack=stack, old_token=old_token, stack_mode=stack_mode)
+    fr = run_trial(pid, plan=plan, list_only=list_only, stack=stack, old_token=old_token, stack_mode=stack_mode, password=password)
     rec.update(fr)
     if list_only:
         rec["status"] = "listed"
         return rec
     if fr["launched"] and fr["launched"].get("code") == 0:
-        rec["sheet"] = confirm_zero(password=password)
-        rec["subscription_page"] = verify()
-        rec["status"] = "subscribed" if "Ultra" in rec["subscription_page"] else "launched"
+        sheet = fr.get("sheet") or confirm_zero(password=password, frida_res=fr)
+        rec["sheet"] = sheet
+        if sheet.get("success"):
+            rec["status"] = "subscribed"
+        elif sheet.get("error") or sheet.get("ineligible"):
+            rec["status"] = "error"
+            sh("shell", f"am force-stop {PKG}")
+        else:
+            tok_after = read_purchase_token("subs_variant")
+            if tok_after and tok_after != old_token:
+                rec["status"] = "subscribed"
+            else:
+                rec["status"] = "failed"
     else:
         rec["status"] = "launch_failed"
     return rec
@@ -850,7 +973,7 @@ def main():
     for r in results:
         print(f"  {r['email']:<42} {r.get('status')}")
     print(f"\nChi tiết đã lưu vào {REPORT_DIR.resolve()}")
-    return 0
+    return 0 if any(r.get("status") in ("subscribed", "listed") for r in results) else 1
 
 
 entry = main

@@ -9,5 +9,8 @@ echo   Xac nhan trang thanh toan ghi: dung thu mien phi 12 thang
 echo   KHONG xac nhan neu no hien 1 thang hoac co gia tien
 echo ============================================
 python ultra0.py --account "current@device" --no-add --force --plan pro12
+set EXIT_CODE=%ERRORLEVEL%
+if defined AUTO_FLOW exit /b %EXIT_CODE%
 echo.
 pause
+exit /b %EXIT_CODE%

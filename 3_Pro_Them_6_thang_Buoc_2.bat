@@ -10,5 +10,8 @@ echo   Dung nang cap goi dang ky (purchaseToken cu + CHARGE_FULL_PRICE) de
 echo   thoi gian dung thu con lai duoc quy doi va doi lai thay vi bi thay the.
 echo ============================================
 python ultra0.py --account "current@device" --no-add --force --stack --plan pro6
+set EXIT_CODE=%ERRORLEVEL%
+if defined AUTO_FLOW exit /b %EXIT_CODE%
 echo.
 pause
+exit /b %EXIT_CODE%
