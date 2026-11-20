@@ -1,184 +1,171 @@
 # TUT Google AI Pro Optimized
 
-Bộ công cụ tự động hóa kiểm tra offer, đăng ký dùng thử **0 đồng** và **cộng dồn thời hạn gói Google AI Pro (5 TB)** thông qua Android Play Billing (tối ưu cho giả lập **MuMu Player** hoặc thiết bị Android đã root).
+**English** | [Tiếng Việt](README.vi.md)
+
+An automation toolkit for inspecting hidden offers, claiming **$0 free trials**, and **stacking subscription duration for Google AI Pro (5 TB)** via Android Play Billing (optimized for **MuMu Player** emulators or rooted Android devices).
 
 ---
 
-## 1. Công cụ này hoạt động như thế nào?
+## 1. How It Works
 
-Nhiều ưu đãi dùng thử miễn phí của Google One (như `12months-eft`, `6months-eft`, `eft-3months`, …) không hiển thị trực tiếp trên giao diện web hay trong app, nhưng lại tồn tại trong dữ liệu trả về của thư viện **Google Play Billing (`BillingClient`)**.
+Many Google One promotional trial offers (such as `12months-eft`, `6months-eft`, `eft-3months`, etc.) are not displayed in the web UI or inside the app, but are returned directly by the **Google Play Billing (`BillingClient`)** library.
 
-Thay vì phải chỉnh sửa APK hay cài Xposed, `ultra0.py` hoạt động theo cơ chế **tiêm script runtime (Frida)**:
+Instead of patching APKs or installing Xposed, `ultra0.py` uses **runtime Frida injection**:
 
-1. **Chuẩn bị môi trường thiết bị**: Kiểm tra quyền `root`, tắt animation hệ thống (giúp đọc UI nhanh), tắt proxy chặn mạng Play, đẩy `frida-server` và module `BillingClient` (`module_521.apk`) nhúng sẵn vào `/data/local/tmp/`.
-2. **Đồng bộ ngữ cảnh tài khoản**: Xác định đúng email Google đang hoạt động trên thiết bị, dọn cache `sku_details.db` / `app_commerce_acquire_cache` và đồng bộ chủ sở hữu gói Google One trong `localappstate.db` của Play Store để tránh lỗi dính cache hoặc nhầm tài khoản.
-3. **Đọc trạng thái gói hiện tại (khi cộng dồn `--stack`)**:
-   - Đọc `purchaseToken` còn hiệu lực của đúng tài khoản từ `library.db` (hoặc lấy trực tiếp từ `queryPurchases` của Play Billing).
-   - Nếu gói đang ở trạng thái **Đã hủy gia hạn (`autoRenewing = false`)**, script tự mở trang Subscriptions trên Play Store để thử bấm **Resubscribe / Đăng ký lại** trước khi cộng dồn.
-4. **Mượn tiến trình Google One để gọi Play Billing**:
-   - Inject JavaScript vào tiến trình `com.google.android.apps.subscriptions.red` (Google One) bằng **Frida 16.5.9**.
-   - Dùng `DexClassLoader` nạp `module_521.apk`, khởi tạo `BillingClient`, truy vấn SKU (`queryProductDetails`) để lấy `offerToken` của gói miễn phí mục tiêu.
-   - Khi chạy chế độ cộng dồn (`--stack`), script truyền `oldPurchaseToken` kèm `SubscriptionUpdateParams` với `prorationMode = 5` (`CHARGE_FULL_PRICE`) để **quy đổi và nối tiếp thời gian dùng thử còn lại** thay vì thay thế mất ngày cũ.
-5. **Kiểm tra an toàn trước khi xác nhận thanh toán**:
-   - Khi hộp thoại thanh toán Google Play hiện lên, script đọc giao diện qua `uiautomator`.
-   - **Chỉ bấm `Subscribe / Đăng ký`** khi xác nhận là gói dùng thử miễn phí / giá `0` (và không phải gói 1 tháng thông thường).
-   - Nếu xuất hiện hộp thoại `Error` hoặc thông báo không đủ điều kiện, script tự đóng hộp thoại, dọn cache và trả về mã lỗi (`exit code != 0`) để luồng tự động chuyển sang bước tiếp theo.
-6. **Lưu báo cáo**: Kết quả từng lần chạy được lưu dưới dạng JSON trong thư mục `ultra0-report/`.
-
----
-
-## 2. Cấu trúc thư mục
-
-| File / Thư mục                  | Chức năng                                                                                                                 |
-| :------------------------------ | :------------------------------------------------------------------------------------------------------------------------ |
-| `Cai_dat_moi_truong.bat`        | Cài đặt nhanh môi trường trên Windows (gọi `setup_env.py`)                                                                |
-| `0_Kiem_tra_moi_truong.bat`     | Kiểm tra thiết bị Android/giả lập, root, `frida-server`, module Billing và Play Store                                     |
-| `1_Xem_danh_sach_offer.bat`     | Liệt kê tất cả offer & token hiện có của tài khoản (chỉ đọc, không mở thanh toán)                                         |
-| `2_Pro_12_thang_Buoc_1.bat`     | Bước 1: Đăng ký gói Pro 5TB **12 tháng** (`--plan pro12`)                                                                 |
-| `3_Pro_Them_6_thang_Buoc_2.bat` | Bước 2: Cộng dồn thêm **6 tháng** (`--stack --plan pro6`)                                                                 |
-| `4_Pro_Them_6_thang_Buoc_3.bat` | Bước 3: Cộng dồn thêm **6 tháng** nữa (`--stack --plan pro6b`)                                                            |
-| `5_Pro_Du_phong_6_thang.bat`    | Dự phòng: Cộng dồn thêm **6 tháng** (`--stack --plan pro6c`)                                                              |
-| `6_Pro_3_thang_eft.bat`         | Gói **3 tháng** (`--stack --plan pro3`)                                                                                   |
-| `7_Auto_Chay_2_den_6.bat`       | Chạy tự động lần lượt từ file `2` đến `6`; gặp lỗi tự nhảy bước tiếp theo, xong lượt đầu sẽ random cho đến khi thành công |
-| `ultra0.py`                     | Script lõi thực thi toàn bộ quy trình ADB, đồng bộ tài khoản, Frida inject và auto UI                                     |
-| `setup_env.py`                  | Script kiểm tra Python, cài `frida==16.5.9`, tìm/tải `adb` và kết nối giả lập                                             |
-| `query_sku.py`                  | Công cụ CLI tra cứu nhanh toàn bộ offer của bất kỳ SKU nào                                                                |
-| `requirements.txt`              | Khai báo thư viện Python (`frida>=16.0`, khuyến nghị `16.5.9`)                                                            |
-| `Huong_dan_su_dung.txt`         | Ghi chú hướng dẫn gốc kèm theo repo                                                                                       |
-| `ultra0-report/`                | Thư mục lưu file JSON báo cáo kết quả theo từng tài khoản                                                                 |
+1. **Device Environment Preparation**: Checks `root` access, disables system animations (for fast UI dumps), clears blocking proxies, and pushes `frida-server` plus the embedded `BillingClient` module (`module_521.apk`) to `/data/local/tmp/`.
+2. **Account Context Sync**: Resolves the real active Google email on the device, clears Play Store & Google One billing caches (`sku_details.db`, `app_commerce_acquire_cache`), and syncs the Google One package owner in Play Store's `localappstate.db` to prevent stale offer caches or cross-account conflicts.
+3. **Existing Subscription Check (when stacking with `--stack`)**:
+   - Reads the active `purchaseToken` belonging to the target account from `library.db` (or via Play Billing `queryPurchases`).
+   - If the current subscription is **Canceled (`autoRenewing = false`)**, the script automatically opens Play Store Subscriptions and attempts to **Resubscribe** so stacking can proceed.
+4. **Borrowing the Google One Process for Play Billing**:
+   - Injects JavaScript into `com.google.android.apps.subscriptions.red` (Google One) using **Frida 16.5.9**.
+   - Loads `module_521.apk` via `DexClassLoader`, initializes `BillingClient`, and queries `queryProductDetails` to locate the target free-trial `offerToken`.
+   - In stack mode (`--stack`), passes `oldPurchaseToken` together with `SubscriptionUpdateParams` using `prorationMode = 5` (`CHARGE_FULL_PRICE`) so **remaining trial days are converted and carried forward** instead of being overwritten.
+5. **Pre-Confirmation Safety Checks**:
+   - Monitors the Google Play Billing sheet via `uiautomator`.
+   - **Only taps `Subscribe`** when a `$0` / free-trial offer is verified (and refuses plain 1-month trials or non-zero prices).
+   - If an `Error` or ineligible dialog appears, dismisses it, clears billing cache, and exits with a non-zero status code so batch automation can advance to the next step.
+6. **Reporting**: Saves per-account execution details as JSON files inside `ultra0-report/`.
 
 ---
 
-## 3. Chuẩn bị trước khi chạy
+## 2. Repository Structure
 
-### Trên máy tính (Windows)
-
-- **Python 3.10 trở lên** (tối thiểu 3.9).
-- **Frida phiên bản `16.5.9`** _(bắt buộc dùng nhánh `16.x`; bản `17.x` đã bỏ Java bridge nên không chạy được — `setup_env.py` sẽ tự hạ cấp giúp bạn)_.
-- **ADB** (dùng sẵn ADB của MuMu Player, trong `PATH`, hoặc để `setup_env.py` tự tải `platform-tools`).
-
-### Trên giả lập MuMu / điện thoại Android
-
-1. Thiết bị đã bật **Root** và bật **Gỡ lỗi USB / ADB Debugging**.
-2. Đã cài sẵn **Google Play Store** và **Google One** (`com.google.android.apps.subscriptions.red`).
-3. Đã đăng nhập tài khoản Google cần dùng trên thiết bị.
-4. Tài khoản đã gắn sẵn **phương thức thanh toán** (khuyến nghị dùng thẻ có hạn mức thấp để tránh bị trừ nhầm nếu quên hủy).
-5. Play Store mở được bình thường (không bị chặn mạng/proxy).
+| File / Folder | Purpose |
+| :--- | :--- |
+| `Cai_dat_moi_truong.bat` | One-click Windows environment setup (runs `setup_env.py`) |
+| `0_Kiem_tra_moi_truong.bat` | Verifies emulator/device connection, root, `frida-server`, Billing module, and Play Store |
+| `1_Xem_danh_sach_offer.bat` | Lists all available offers & tokens for the current account (read-only, no purchase launched) |
+| `2_Pro_12_thang_Buoc_1.bat` | Step 1: Subscribe to the **12-month** Pro 5TB trial (`--plan pro12`) |
+| `3_Pro_Them_6_thang_Buoc_2.bat` | Step 2: Stack **+6 months** (`--stack --plan pro6`) |
+| `4_Pro_Them_6_thang_Buoc_3.bat` | Step 3: Stack another **+6 months** (`--stack --plan pro6b`) |
+| `5_Pro_Du_phong_6_thang.bat` | Backup: Stack **+6 months** (`--stack --plan pro6c`) |
+| `6_Pro_3_thang_eft.bat` | Stack / claim the **3-month** offer (`--stack --plan pro3`) |
+| `7_Auto_Chay_2_den_6.bat` | Automated runner looping scripts `2` through `6`; advances on error and falls back to random retries until one succeeds |
+| `ultra0.py` | Core script handling ADB automation, account sync, Frida injection, and Billing UI confirmation |
+| `setup_env.py` | Checks Python, installs `frida==16.5.9`, locates/downloads `adb`, connects emulator, and runs `--check` |
+| `query_sku.py` | Standalone CLI helper to inspect all offers for arbitrary SKU IDs |
+| `requirements.txt` | Python dependency specification (`frida>=16.0`, `16.5.9` recommended) |
+| `Huong_dan_su_dung.txt` | Original Vietnamese usage notes |
+| `README.vi.md` | Full Vietnamese documentation |
+| `ultra0-report/` | Output directory for per-account JSON run reports |
 
 ---
 
-## 4. Hướng dẫn sử dụng từng bước (cho người mới)
+## 3. Prerequisites
 
-### Bước 1: Cài đặt môi trường một chạm
+### On Windows PC
+- **Python 3.10+** (minimum 3.9).
+- **Frida `16.5.9`** *(must use the `16.x` branch; `17.x` removed the Java bridge and will not work — `setup_env.py` automatically installs/downgrades to `16.5.9`)*.
+- **ADB** (auto-detected from MuMu Player, `PATH`, or downloaded automatically via `platform-tools` by `setup_env.py`).
 
-Bấm đúp file **`Cai_dat_moi_truong.bat`** (hoặc chạy `python setup_env.py`). Script sẽ tự động:
+### On MuMu Emulator / Android Device
+1. **Root** access and **USB / ADB Debugging** enabled.
+2. **Google Play Store** and **Google One** (`com.google.android.apps.subscriptions.red`) installed.
+3. Target Google account signed in on the device.
+4. A **payment method** added to the Google account (a low-limit card is recommended in case you forget to cancel before renewal).
+5. Play Store opens and connects normally (no blocking proxy).
 
-- Kiểm tra phiên bản Python.
-- Cài `frida==16.5.9`.
-- Tìm `adb.exe` (tự nhận diện thư mục cài MuMu hoặc tải `platform-tools` từ Google).
-- Kết nối tới các cổng ADB phổ biến của giả lập (`16384`, `7555`, `16416`, `21503`, `62001`).
-- Chạy `ultra0.py --check` để kiểm tra toàn bộ hệ thống.
+---
 
-### Bước 2: Kiểm tra môi trường & xem offer (không rủi ro)
+## 4. Quick Start Guide
 
-1. Bấm đúp **`0_Kiem_tra_moi_truong.bat`** → Đảm bảo mọi mục kiểm tra đều báo đạt (`✅`).
-2. Bấm đúp **`1_Xem_danh_sach_offer.bat`** → Liệt kê các offer khả dụng trên tài khoản đang đăng nhập mà **không mở trang thanh toán**.
+### Step 1: One-Click Environment Setup
+Double-click **`Cai_dat_moi_truong.bat`** (or run `python setup_env.py`). It will automatically:
+- Verify your Python version.
+- Install `frida==16.5.9`.
+- Locate `adb.exe` (or download `platform-tools` from Google).
+- Connect to common emulator ADB ports (`16384`, `7555`, `16416`, `21503`, `62001`).
+- Run `ultra0.py --check` to validate the setup.
 
-### Bước 3: Mở gói & cộng dồn thời hạn
+### Step 2: Check Environment & Inspect Offers (Risk-Free)
+1. Double-click **`0_Kiem_tra_moi_truong.bat`** → Confirm all checks pass (`✅`).
+2. Double-click **`1_Xem_danh_sach_offer.bat`** → View available offers on the active account without opening any checkout sheet.
 
-Bạn có thể chọn **chạy từng bước thủ công** hoặc **chạy tự động**:
+### Step 3: Claim & Stack Subscriptions
 
-#### Cách A — Chạy từng bước thủ công (khuyên dùng để hiểu rõ từng giai đoạn)
+#### Option A — Manual Step-by-Step (Recommended for Understanding Each Stage)
+Run the batch scripts in order:
+1. **`2_Pro_12_thang_Buoc_1.bat`** → Claim the initial 12-month plan (`pro12`).
+2. **`3_Pro_Them_6_thang_Buoc_2.bat`** → Stack +6 months (`pro6`, ~18 months total).
+3. **`4_Pro_Them_6_thang_Buoc_3.bat`** → Stack +6 months (`pro6b`, ~24 months total).
+4. **`5_Pro_Du_phong_6_thang.bat`** → Stack backup +6 months (`pro6c`).
+5. **`6_Pro_3_thang_eft.bat`** → Attempt +3 months (`pro3`).
 
-Chạy lần lượt theo thứ tự:
-
-1. **`2_Pro_12_thang_Buoc_1.bat`** → Mở gói 12 tháng đầu tiên (`pro12`).
-2. **`3_Pro_Them_6_thang_Buoc_2.bat`** → Cộng dồn thêm 6 tháng (`pro6`, tổng ~18 tháng).
-3. **`4_Pro_Them_6_thang_Buoc_3.bat`** → Cộng dồn thêm 6 tháng (`pro6b`, tổng ~24 tháng).
-4. **`5_Pro_Du_phong_6_thang.bat`** → Cộng dồn thêm 6 tháng dự phòng (`pro6c`).
-5. **`6_Pro_3_thang_eft.bat`** → Thử thêm gói 3 tháng (`pro3`).
-
-> **Cách nhận biết trang thanh toán cộng dồn ĐÚNG:**
+> **How to verify a VALID stacked checkout sheet:**
+> - Due today: **`0`** (e.g., `Today: US$0` / `JP¥0`).
+> - Shows converted days carried over from your current plan (e.g., *`546 days (including 364 days converted from your current plan's remaining time)`*).
+> - **Billing start date** is pushed forward into the future (12 → 18 → 24 months ahead).
 >
-> - Hôm nay: **`0`** (ví dụ `Hôm nay JP¥0` / `US$0`).
-> - Có dòng quy đổi thời gian từ gói hiện tại (ví dụ: _`546 ngày (bao gồm 364 ngày được quy đổi từ thời gian còn lại của gói hiện tại của bạn)`_).
-> - **Ngày bắt đầu tính phí** được dời về tương lai (12 → 18 → 24 tháng sau).
->
-> Nếu thấy **ngày bắt đầu = ngày hết hạn cũ và hôm nay trừ tiền ngay**, tuyệt đối không bấm đăng ký; kiểm tra lại xem gói hiện tại có đang ở trạng thái **Active (tự gia hạn bật)** và có bật cờ `--stack` hay chưa.
+> If the sheet shows **billing starts at the old expiry date or charges immediately today**, do not confirm — verify that the current subscription is **Active (auto-renew enabled)** and `--stack` is set.
 
-#### Cách B — Chạy luồng tự động
-
-Bấm đúp **`7_Auto_Chay_2_den_6.bat`**:
-
-- Đặt biến `AUTO_FLOW=1` để các file `.bat` con không dừng `pause` giữa chừng.
-- Tự động chạy tuần tự từ file `2` → `6`.
-- Nếu gặp hộp thoại `Error` hoặc không đủ điều kiện, script đóng bước hiện tại và tự chuyển sang file tiếp theo.
-- Nếu chạy hết 1 lượt chưa thành công, script chuyển sang chế độ thử ngẫu nhiên (`RANDOM`) cho tới khi một file báo thành công (`exit code 0`), hoặc bạn bấm `Ctrl + C` để dừng.
+#### Option B — Automated Runner
+Double-click **`7_Auto_Chay_2_den_6.bat`**:
+- Sets `AUTO_FLOW=1` so individual `.bat` files return exit codes immediately without pausing.
+- Sequentially tries scripts `2` through `6`.
+- Moves to the next script automatically whenever an error occurs.
+- After the first pass, switches to random retry mode (`RANDOM`) until a script succeeds (`exit code 0`), or stop anytime with `Ctrl + C`.
 
 ---
 
-## 5. Bảng các gói (`--plan`) và SKU tương ứng
+## 5. Plans (`--plan`) & SKU Mapping
 
-| Tham số `--plan`      | File `.bat` tương ứng           | SKU trên Play Billing                       | Offer ưu tiên         | Ghi chú                                                    |
-| :-------------------- | :------------------------------ | :------------------------------------------ | :-------------------- | :--------------------------------------------------------- |
-| `pro12`               | `2_Pro_12_thang_Buoc_1.bat`     | `g1.2tb.ai.subs_variant`                    | `12months-eft`        | Gói 12 tháng (bước 1)                                      |
-| `pro6`                | `3_Pro_Them_6_thang_Buoc_2.bat` | `g1.2tb.ai.subs_variant`                    | `6months-eft`         | Cộng dồn +6 tháng (bước 2)                                 |
-| `pro6b`               | `4_Pro_Them_6_thang_Buoc_3.bat` | `g1.2tb.ai.subs_variant`                    | `6months-eft-2`       | Cộng dồn +6 tháng (bước 3)                                 |
-| `pro6c`               | `5_Pro_Du_phong_6_thang.bat`    | `g1.2tb.ai.subs_variant`                    | `6months-eft-ss-2026` | Cộng dồn +6 tháng dự phòng                                 |
-| `pro3`                | `6_Pro_3_thang_eft.bat`         | `g1.2tb.ai.3months_eft`                     | `eft-3months`         | Gói 3 tháng                                                |
-| `5x` / `20x` / `auto` | _(CLI)_                         | `g1.play.20tb`, `g1.play.ai.pro`, `g1.30tb` | Tự chọn dài nhất      | Gói Ultra cũ (thường không còn offer cho tài khoản thường) |
+| `--plan` Value | Batch Script | Play Billing SKU | Preferred Offer ID | Notes |
+| :--- | :--- | :--- | :--- | :--- |
+| `pro12` | `2_Pro_12_thang_Buoc_1.bat` | `g1.2tb.ai.subs_variant` | `12months-eft` | Initial 12-month Pro 5TB trial |
+| `pro6` | `3_Pro_Them_6_thang_Buoc_2.bat` | `g1.2tb.ai.subs_variant` | `6months-eft` | Stack +6 months (step 2) |
+| `pro6b` | `4_Pro_Them_6_thang_Buoc_3.bat` | `g1.2tb.ai.subs_variant` | `6months-eft-2` | Stack +6 months (step 3) |
+| `pro6c` | `5_Pro_Du_phong_6_thang.bat` | `g1.2tb.ai.subs_variant` | `6months-eft-ss-2026` | Stack +6 months (backup) |
+| `pro3` | `6_Pro_3_thang_eft.bat` | `g1.2tb.ai.3months_eft` | `eft-3months` | 3-month trial offer |
+| `5x` / `20x` / `auto` | *(CLI)* | `g1.play.20tb`, `g1.play.ai.pro`, `g1.30tb` | Longest available | Legacy Ultra plans (rarely offered to regular accounts) |
 
 ---
 
-## 6. Sử dụng nâng cao qua dòng lệnh (CLI)
+## 6. Advanced CLI Usage
 
-### Lệnh `ultra0.py`
-
+### Running `ultra0.py` Directly
 ```bash
-# Kiểm tra môi trường
+# Check environment
 python ultra0.py --check
 
-# Liệt kê offer của tài khoản hiện tại trên thiết bị (không mua)
+# List offers for the currently signed-in device account (read-only)
 python ultra0.py --account "current@device" --no-add --force --list --plan pro12
 
-# Chạy 1 tài khoản đang đăng nhập sẵn trên thiết bị
+# Run for the currently signed-in account
 python ultra0.py --account "current@device" --no-add --force --plan pro12
 python ultra0.py --account "current@device" --no-add --force --stack --plan pro6
 
-# Chạy chỉ định email (email:password:totp)
-python ultra0.py --account "user@gmail.com:matkhau:2FAKEY" --plan pro12
+# Target a specific account (email:password:totp)
+python ultra0.py --account "user@gmail.com:password:2FAKEY" --plan pro12
 
-# Chạy hàng loạt từ file danh sách (mỗi dòng: email----password----recovery----totp)
+# Batch run from an accounts file (format per line: email----password----recovery----totp)
 python ultra0.py accounts.txt --plan pro12
 ```
 
-**Các tham số chính của `ultra0.py`:**
+**Main CLI Flags:**
+- `--check`: Run ADB, root, Frida, Billing module, and Play Store diagnostics.
+- `--list`: Query and print offers/tokens without launching checkout.
+- `--plan {auto,5x,20x,pro12,pro6,pro6b,pro6c,pro3}`: Select the target plan/offer.
+- `--stack`: Enable subscription upgrade stacking using the current active `purchaseToken`.
+- `--old-token <token>`: Manually supply `oldPurchaseToken` when using `--stack`.
+- `--mode <1..5>`: Override `prorationMode` (defaults to `5` = `CHARGE_FULL_PRICE` when stacking).
+- `--no-add`: Skip automatic Google account login (use an account already on the device).
+- `--no-switch`: Do not auto-switch Play Store accounts; only verify the active one matches.
+- `--force`: Skip Play Store UI account verification.
+- `--serial <id>`: Target a specific ADB device serial when multiple devices/emulators are attached.
 
-- `--check`: Tự kiểm tra kết nối ADB, root, Frida, module Billing và Play Store.
-- `--list`: Chỉ tra và in danh sách offer, không mở trang thanh toán.
-- `--plan {auto,5x,20x,pro12,pro6,pro6b,pro6c,pro3}`: Chọn gói/offer cần xử lý.
-- `--stack`: Bật chế độ nâng cấp cộng dồn dựa trên `purchaseToken` hiện tại.
-- `--old-token <token>`: Truyền thủ công `purchaseToken` cũ khi dùng kèm `--stack`.
-- `--mode <1..5>`: Chọn `prorationMode` khi nâng cấp (mặc định khi stack là `5` = `CHARGE_FULL_PRICE`).
-- `--no-add`: Bỏ qua bước tự thêm tài khoản Google (dùng tài khoản đã đăng nhập sẵn).
-- `--no-switch`: Không tự chuyển tài khoản trong Play Store, chỉ kiểm tra có đúng tài khoản hay không.
-- `--force`: Bỏ qua bước kiểm tra tài khoản trên UI Play Store.
-- `--serial <id>`: Chỉ định ADB serial nếu máy đang kết nối nhiều thiết bị/giả lập.
-
-### Tra cứu SKU tùy ý với `query_sku.py`
-
-Yêu cầu đã bật `frida-server` (hoặc forward cổng `27042`) và Google One đang mở:
-
+### Querying Custom SKUs with `query_sku.py`
+Requires `frida-server` running (or forwarded on `127.0.0.1:27042`) with Google One open:
 ```bash
 python query_sku.py g1.2tb.ai.subs_variant g1.2tb.ai.3months_eft
 ```
 
 ---
 
-## 7. Lưu ý quan trọng & Xử lý sự cố
+## 7. Important Notes & Troubleshooting
 
-- **Luôn giữ gói ở trạng thái Active trong lúc cộng dồn**: Gói đã hủy (`Canceled` / `autoRenewing=false`) sẽ không cộng dồn được bằng `SubscriptionUpdateParams`. Hãy cộng dồn xong toàn bộ các bước rồi mới hủy gia hạn. Sau khi hủy, quyền lợi vẫn giữ nguyên đến hết ngày hết hạn.
-- **Kẹt ở bước `connecting`**: Play Store chưa chạy hoặc bị treo; hãy mở thủ công Play Store trên giả lập hoặc khởi động lại giả lập.
-- **Lỗi `Bạn đã đăng ký` / `ITEM_UNAVAILABLE`**: Tài khoản đã có gói ở trạng thái xung đột (thường do chưa bật `--stack`, dính cache `sku_details.db`, hoặc gói cũ đang bị `Canceled`). Script bản mới đã tự động dọn cache, đồng bộ tài khoản và thử Resubscribe, nhưng nếu vẫn lỗi nhiều lần liên tiếp thì nên nghỉ ~24 giờ để tránh kiểm soát rủi ro (risk control).
-- **Lỗi `Không kết nối được với Internet`**: Mạng giả lập chập chờn hoặc vướng proxy cũ; đợi vài giây rồi thử lại hoặc khởi động lại giả lập.
-- **Nhớ hủy gói trước ngày gia hạn**: Sau khi hoàn tất cộng dồn, kiểm tra lại tại `https://play.google.com/store/account/subscriptions` để xác nhận ngày thanh toán tiếp theo và hủy tự gia hạn nếu không muốn bị trừ tiền khi hết hạn dùng thử.
+- **Keep the subscription Active while stacking**: A canceled plan (`autoRenewing=false`) cannot be stacked via `SubscriptionUpdateParams`. Finish all stacking steps first, then cancel auto-renewal afterward (benefits remain valid until the expiration date).
+- **Stuck at `connecting`**: Play Store is not running or froze — open Play Store manually or restart the emulator.
+- **`Already subscribed` / `ITEM_UNAVAILABLE`**: Usually caused by missing `--stack`, stale `sku_details.db` cache, or a canceled existing subscription. The latest `ultra0.py` automatically clears caches, syncs account state, and attempts resubscription; if repeated errors occur, wait ~24 hours to avoid risk-control rate limits.
+- **`No internet connection`**: Temporary emulator network/proxy hiccup — retry after a few seconds or restart the emulator.
+- **Remember to cancel before renewal**: Check `https://play.google.com/store/account/subscriptions` after stacking to confirm the next billing date and cancel auto-renewal if you do not want to be charged at the end of the trial.
