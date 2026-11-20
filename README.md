@@ -31,35 +31,37 @@ Instead of patching APKs or installing Xposed, `ultra0.py` uses **runtime Frida 
 
 ## 2. Repository Structure
 
-| File / Folder | Purpose |
-| :--- | :--- |
-| `Cai_dat_moi_truong.bat` | One-click Windows environment setup (runs `setup_env.py`) |
-| `0_Kiem_tra_moi_truong.bat` | Verifies emulator/device connection, root, `frida-server`, Billing module, and Play Store |
-| `1_Xem_danh_sach_offer.bat` | Lists all available offers & tokens for the current account (read-only, no purchase launched) |
-| `2_Pro_12_thang_Buoc_1.bat` | Step 1: Subscribe to the **12-month** Pro 5TB trial (`--plan pro12`) |
-| `3_Pro_Them_6_thang_Buoc_2.bat` | Step 2: Stack **+6 months** (`--stack --plan pro6`) |
-| `4_Pro_Them_6_thang_Buoc_3.bat` | Step 3: Stack another **+6 months** (`--stack --plan pro6b`) |
-| `5_Pro_Du_phong_6_thang.bat` | Backup: Stack **+6 months** (`--stack --plan pro6c`) |
-| `6_Pro_3_thang_eft.bat` | Stack / claim the **3-month** offer (`--stack --plan pro3`) |
-| `7_Auto_Chay_2_den_6.bat` | Automated runner looping scripts `2` through `6`; advances on error and falls back to random retries until one succeeds |
-| `ultra0.py` | Core script handling ADB automation, account sync, Frida injection, and Billing UI confirmation |
-| `setup_env.py` | Checks Python, installs `frida==16.5.9`, locates/downloads `adb`, connects emulator, and runs `--check` |
-| `query_sku.py` | Standalone CLI helper to inspect all offers for arbitrary SKU IDs |
-| `requirements.txt` | Python dependency specification (`frida>=16.0`, `16.5.9` recommended) |
-| `Huong_dan_su_dung.txt` | Original Vietnamese usage notes |
-| `README.vi.md` | Full Vietnamese documentation |
-| `ultra0-report/` | Output directory for per-account JSON run reports |
+| File / Folder                   | Purpose                                                                                                                 |
+| :------------------------------ | :---------------------------------------------------------------------------------------------------------------------- |
+| `Cai_dat_moi_truong.bat`        | One-click Windows environment setup (runs `setup_env.py`)                                                               |
+| `0_Kiem_tra_moi_truong.bat`     | Verifies emulator/device connection, root, `frida-server`, Billing module, and Play Store                               |
+| `1_Xem_danh_sach_offer.bat`     | Lists all available offers & tokens for the current account (read-only, no purchase launched)                           |
+| `2_Pro_12_thang_Buoc_1.bat`     | Step 1: Subscribe to the **12-month** Pro 5TB trial (`--plan pro12`)                                                    |
+| `3_Pro_Them_6_thang_Buoc_2.bat` | Step 2: Stack **+6 months** (`--stack --plan pro6`)                                                                     |
+| `4_Pro_Them_6_thang_Buoc_3.bat` | Step 3: Stack another **+6 months** (`--stack --plan pro6b`)                                                            |
+| `5_Pro_Du_phong_6_thang.bat`    | Backup: Stack **+6 months** (`--stack --plan pro6c`)                                                                    |
+| `6_Pro_3_thang_eft.bat`         | Stack / claim the **3-month** offer (`--stack --plan pro3`)                                                             |
+| `7_Auto_Chay_2_den_6.bat`       | Automated runner looping scripts `2` through `6`; advances on error and falls back to random retries until one succeeds |
+| `ultra0.py`                     | Core script handling ADB automation, account sync, Frida injection, and Billing UI confirmation                         |
+| `setup_env.py`                  | Checks Python, installs `frida==16.5.9`, locates/downloads `adb`, connects emulator, and runs `--check`                 |
+| `query_sku.py`                  | Standalone CLI helper to inspect all offers for arbitrary SKU IDs                                                       |
+| `requirements.txt`              | Python dependency specification (`frida>=16.0`, `16.5.9` recommended)                                                   |
+| `Huong_dan_su_dung.txt`         | Original Vietnamese usage notes                                                                                         |
+| `README.vi.md`                  | Full Vietnamese documentation                                                                                           |
+| `ultra0-report/`                | Output directory for per-account JSON run reports                                                                       |
 
 ---
 
 ## 3. Prerequisites
 
 ### On Windows PC
+
 - **Python 3.10+** (minimum 3.9).
-- **Frida `16.5.9`** *(must use the `16.x` branch; `17.x` removed the Java bridge and will not work — `setup_env.py` automatically installs/downgrades to `16.5.9`)*.
+- **Frida `16.5.9`** _(must use the `16.x` branch; `17.x` removed the Java bridge and will not work — `setup_env.py` automatically installs/downgrades to `16.5.9`)_.
 - **ADB** (auto-detected from MuMu Player, `PATH`, or downloaded automatically via `platform-tools` by `setup_env.py`).
 
 ### On MuMu Emulator / Android Device
+
 1. **Root** access and **USB / ADB Debugging** enabled.
 2. **Google Play Store** and **Google One** (`com.google.android.apps.subscriptions.red`) installed.
 3. Target Google account signed in on the device.
@@ -71,7 +73,9 @@ Instead of patching APKs or installing Xposed, `ultra0.py` uses **runtime Frida 
 ## 4. Quick Start Guide
 
 ### Step 1: One-Click Environment Setup
+
 Double-click **`Cai_dat_moi_truong.bat`** (or run `python setup_env.py`). It will automatically:
+
 - Verify your Python version.
 - Install `frida==16.5.9`.
 - Locate `adb.exe` (or download `platform-tools` from Google).
@@ -79,13 +83,16 @@ Double-click **`Cai_dat_moi_truong.bat`** (or run `python setup_env.py`). It wil
 - Run `ultra0.py --check` to validate the setup.
 
 ### Step 2: Check Environment & Inspect Offers (Risk-Free)
+
 1. Double-click **`0_Kiem_tra_moi_truong.bat`** → Confirm all checks pass (`✅`).
 2. Double-click **`1_Xem_danh_sach_offer.bat`** → View available offers on the active account without opening any checkout sheet.
 
 ### Step 3: Claim & Stack Subscriptions
 
 #### Option A — Manual Step-by-Step (Recommended for Understanding Each Stage)
+
 Run the batch scripts in order:
+
 1. **`2_Pro_12_thang_Buoc_1.bat`** → Claim the initial 12-month plan (`pro12`).
 2. **`3_Pro_Them_6_thang_Buoc_2.bat`** → Stack +6 months (`pro6`, ~18 months total).
 3. **`4_Pro_Them_6_thang_Buoc_3.bat`** → Stack +6 months (`pro6b`, ~24 months total).
@@ -93,14 +100,17 @@ Run the batch scripts in order:
 5. **`6_Pro_3_thang_eft.bat`** → Attempt +3 months (`pro3`).
 
 > **How to verify a VALID stacked checkout sheet:**
+>
 > - Due today: **`0`** (e.g., `Today: US$0` / `JP¥0`).
-> - Shows converted days carried over from your current plan (e.g., *`546 days (including 364 days converted from your current plan's remaining time)`*).
+> - Shows converted days carried over from your current plan (e.g., _`546 days (including 364 days converted from your current plan's remaining time)`_).
 > - **Billing start date** is pushed forward into the future (12 → 18 → 24 months ahead).
 >
 > If the sheet shows **billing starts at the old expiry date or charges immediately today**, do not confirm — verify that the current subscription is **Active (auto-renew enabled)** and `--stack` is set.
 
 #### Option B — Automated Runner
+
 Double-click **`7_Auto_Chay_2_den_6.bat`**:
+
 - Sets `AUTO_FLOW=1` so individual `.bat` files return exit codes immediately without pausing.
 - Sequentially tries scripts `2` through `6`.
 - Moves to the next script automatically whenever an error occurs.
@@ -110,20 +120,21 @@ Double-click **`7_Auto_Chay_2_den_6.bat`**:
 
 ## 5. Plans (`--plan`) & SKU Mapping
 
-| `--plan` Value | Batch Script | Play Billing SKU | Preferred Offer ID | Notes |
-| :--- | :--- | :--- | :--- | :--- |
-| `pro12` | `2_Pro_12_thang_Buoc_1.bat` | `g1.2tb.ai.subs_variant` | `12months-eft` | Initial 12-month Pro 5TB trial |
-| `pro6` | `3_Pro_Them_6_thang_Buoc_2.bat` | `g1.2tb.ai.subs_variant` | `6months-eft` | Stack +6 months (step 2) |
-| `pro6b` | `4_Pro_Them_6_thang_Buoc_3.bat` | `g1.2tb.ai.subs_variant` | `6months-eft-2` | Stack +6 months (step 3) |
-| `pro6c` | `5_Pro_Du_phong_6_thang.bat` | `g1.2tb.ai.subs_variant` | `6months-eft-ss-2026` | Stack +6 months (backup) |
-| `pro3` | `6_Pro_3_thang_eft.bat` | `g1.2tb.ai.3months_eft` | `eft-3months` | 3-month trial offer |
-| `5x` / `20x` / `auto` | *(CLI)* | `g1.play.20tb`, `g1.play.ai.pro`, `g1.30tb` | Longest available | Legacy Ultra plans (rarely offered to regular accounts) |
+| `--plan` Value        | Batch Script                    | Play Billing SKU                            | Preferred Offer ID    | Notes                                                   |
+| :-------------------- | :------------------------------ | :------------------------------------------ | :-------------------- | :------------------------------------------------------ |
+| `pro12`               | `2_Pro_12_thang_Buoc_1.bat`     | `g1.2tb.ai.subs_variant`                    | `12months-eft`        | Initial 12-month Pro 5TB trial                          |
+| `pro6`                | `3_Pro_Them_6_thang_Buoc_2.bat` | `g1.2tb.ai.subs_variant`                    | `6months-eft`         | Stack +6 months (step 2)                                |
+| `pro6b`               | `4_Pro_Them_6_thang_Buoc_3.bat` | `g1.2tb.ai.subs_variant`                    | `6months-eft-2`       | Stack +6 months (step 3)                                |
+| `pro6c`               | `5_Pro_Du_phong_6_thang.bat`    | `g1.2tb.ai.subs_variant`                    | `6months-eft-ss-2026` | Stack +6 months (backup)                                |
+| `pro3`                | `6_Pro_3_thang_eft.bat`         | `g1.2tb.ai.3months_eft`                     | `eft-3months`         | 3-month trial offer                                     |
+| `5x` / `20x` / `auto` | _(CLI)_                         | `g1.play.20tb`, `g1.play.ai.pro`, `g1.30tb` | Longest available     | Legacy Ultra plans (rarely offered to regular accounts) |
 
 ---
 
 ## 6. Advanced CLI Usage
 
 ### Running `ultra0.py` Directly
+
 ```bash
 # Check environment
 python ultra0.py --check
@@ -143,6 +154,7 @@ python ultra0.py accounts.txt --plan pro12
 ```
 
 **Main CLI Flags:**
+
 - `--check`: Run ADB, root, Frida, Billing module, and Play Store diagnostics.
 - `--list`: Query and print offers/tokens without launching checkout.
 - `--plan {auto,5x,20x,pro12,pro6,pro6b,pro6c,pro3}`: Select the target plan/offer.
@@ -155,7 +167,9 @@ python ultra0.py accounts.txt --plan pro12
 - `--serial <id>`: Target a specific ADB device serial when multiple devices/emulators are attached.
 
 ### Querying Custom SKUs with `query_sku.py`
+
 Requires `frida-server` running (or forwarded on `127.0.0.1:27042`) with Google One open:
+
 ```bash
 python query_sku.py g1.2tb.ai.subs_variant g1.2tb.ai.3months_eft
 ```
