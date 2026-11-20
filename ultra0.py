@@ -207,9 +207,10 @@ def ensure_frida_server():
     sys.exit("❌ Khởi động frida-server thất bại")
 
 
-def read_purchase_token(sku_short: str) -> str:
-    """Đọc purchaseToken hiện tại của SKU đó từ library.db của Cửa hàng Play (bắt buộc để cộng dồn)."""
+def read_purchase_info(sku_short: str, account_email: str = "") -> dict:
+    """Đọc chi tiết gói đăng ký hiện tại của đúng tài khoản từ library.db (tránh lấy nhầm token của tài khoản khác & kiểm tra autoRenewing)."""
     import tempfile, sqlite3, json as _json
+    info = {"token": "", "account": "", "alive": False, "auto_renewing": True, "valid_until": 0}
     remote = "/data/local/tmp/lib_read.db"
     try:
         sh("shell", f"cp /data/data/{VENDING}/databases/library.db {remote} 2>/dev/null; chmod 666 {remote}", timeout=30)
@@ -222,10 +223,12 @@ def read_purchase_token(sku_short: str) -> str:
         sh("pull", remote, str(tmp), timeout=60)
     except Exception as e:
         warn(f"Lấy library.db thất bại:{e}")
-        return ""
+        return info
     if not tmp.exists():
-        return ""
-    tok = ""
+        return info
+    want_acc = (account_email or "").strip().lower()
+    if want_acc == "current@device":
+        want_acc = ""
     try:
         con = sqlite3.connect(str(tmp))
         cur = con.cursor()
@@ -239,6 +242,10 @@ def read_purchase_token(sku_short: str) -> str:
         for account, valid, data in rows:
             if not data:
                 continue
+            acc_low = (account or "").strip().lower()
+            # Nguyên nhân 2: Bắt buộc lọc theo đúng email tài khoản đang chạy
+            if want_acc and acc_low != want_acc:
+                continue
             try:
                 j = _json.loads(data)
             except Exception:
@@ -247,17 +254,26 @@ def read_purchase_token(sku_short: str) -> str:
             if not tk:
                 continue
             try:
-                alive = int(valid) > now_ms
+                valid_ms = int(valid or 0)
+                alive = valid_ms > now_ms
             except Exception:
+                valid_ms = 0
                 alive = False
             if not alive:
                 continue
-            # Chỉ lấy gói «chưa hết hạn»; khi nhiều tài khoản đều đang hoạt động thì lấy cái có thời gian hết hạn muộn nhất
-            if picked is None or int(valid or 0) > picked[3]:
-                picked = (tk, account, alive, int(valid or 0))
+            auto_renewing = bool(j.get("autoRenewing", True))
+            if picked is None or valid_ms > picked["valid_until"]:
+                picked = {
+                    "token": tk,
+                    "account": account,
+                    "alive": alive,
+                    "auto_renewing": auto_renewing,
+                    "valid_until": valid_ms,
+                }
         if picked:
-            tok = picked[0]
-            note(f"Tài khoản nguồn của purchaseToken:{picked[1]}（{'còn hiệu lực' if picked[2] else 'đã hết hạn'}）")
+            info.update(picked)
+            state_str = "Đang hoạt động (Active)" if picked["auto_renewing"] else "ĐÃ HỦY GIA HẠN (Canceled / autoRenewing=false)"
+            note(f"Gói hiện tại trong library.db: tài khoản={picked['account']} | trạng thái={state_str}")
         con.close()
     except Exception as e:
         warn(f"Đọc library.db thất bại:{e}")
@@ -266,19 +282,41 @@ def read_purchase_token(sku_short: str) -> str:
             tmp.unlink()
         except Exception:
             pass
-    return tok
+    return info
 
 
-def ensure_vending(restart: bool = False):
+def read_purchase_token(sku_short: str, account_email: str = "") -> str:
+    """Đọc purchaseToken hiện tại của đúng tài khoản từ library.db."""
+    return read_purchase_info(sku_short, account_email).get("token", "")
+
+
+def clean_billing_cache():
+    """Nguyên nhân 3: Xóa cache sku_details.db và app_commerce_acquire_cache của Play Store để tránh dính offerToken cũ."""
+    sh(
+        "shell",
+        f"rm -rf /data/data/{VENDING}/databases/sku_details.db* "
+        f"/data/data/{VENDING}/app_commerce_acquire_cache/* "
+        f"/data/data/{VENDING}/cache/* "
+        f"/data/data/{PKG}/cache/* "
+        f"/data/data/{PKG}/code_cache/* 2>/dev/null",
+        timeout=20,
+    )
+
+
+def ensure_vending(restart: bool = False, auth_account: str = ""):
     """BillingClient cần tiến trình Cửa hàng Play đang chạy, nếu không queryProductDetails sẽ không bao giờ gọi lại."""
     if restart:
         sh("shell", f"am force-stop {VENDING}")
+        clean_billing_cache()
         time.sleep(1)
     if sh("shell", f"pidof {VENDING}"):
         ok("Tiến trình Cửa hàng Play đang chạy")
         return
     warn("Cửa hàng Play chưa chạy, đang mở lên…")
-    sh("shell", f"monkey -p {VENDING} -c android.intent.category.LAUNCHER 1", timeout=30)
+    if auth_account and "@" in auth_account and auth_account != "current@device":
+        sh("shell", f"am start -n {VENDING}/com.google.android.finsky.activities.MainActivity --es authAccount {auth_account}", timeout=30)
+    else:
+        sh("shell", f"monkey -p {VENDING} -c android.intent.category.LAUNCHER 1", timeout=30)
     for _ in range(20):
         time.sleep(1)
         if sh("shell", f"pidof {VENDING}"):
@@ -300,6 +338,11 @@ def ensure_module_apk():
 
 
 def ensure_network():
+    # Tắt animation hệ thống để uiautomator dump phản hồi tức thì, không bị treo khi có hiệu ứng chuyển cảnh
+    try:
+        sh("shell", "settings put global window_animation_scale 0; settings put global transition_animation_scale 0; settings put global animator_duration_scale 0", timeout=10)
+    except Exception:
+        pass
     proxy = sh("shell", "settings get global http_proxy")
     if proxy and proxy != "null" and proxy != ":0":
         sh("shell", "settings put global http_proxy :0")
@@ -383,6 +426,140 @@ def totp(secret: str, digits=6, period=30) -> str:
 def accounts_on_device() -> list:
     out = sh("shell", "dumpsys account | grep 'type=com.google'")
     return out.splitlines()
+
+
+def device_google_emails() -> list[str]:
+    """Lấy danh sách email Google thực sự đang đăng nhập trên thiết bị."""
+    emails = []
+    for line in accounts_on_device():
+        m = re.search(r"name=([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+)", line)
+        if m:
+            em = m.group(1).strip().lower()
+            if em not in emails:
+                emails.append(em)
+    return emails
+
+
+def resolve_active_account(requested_email: str) -> str:
+    """Nguyên nhân 2 & 4: Xác định đúng email đang hoạt động thay vì chuỗi cứng 'current@device'."""
+    req = (requested_email or "").strip().lower()
+    dev_emails = device_google_emails()
+    if req and req != "current@device" and "@" in req:
+        return req
+    if len(dev_emails) == 1:
+        return dev_emails[0]
+    # Nếu có nhiều tài khoản trên thiết bị, ưu tiên đọc từ finsky.xml (last-session-activity-time mới nhất)
+    try:
+        finsky = sh("shell", f"cat /data/data/{VENDING}/shared_prefs/finsky.xml 2>/dev/null", timeout=10)
+        best_em, best_ts = "", -1
+        for m in re.finditer(r'name="last-session-activity-time:([^"]+)"\s+value="(\d+)"', finsky):
+            em, ts = m.group(1).strip().lower(), int(m.group(2))
+            if (not dev_emails or em in dev_emails) and ts > best_ts:
+                best_em, best_ts = em, ts
+        if best_em:
+            return best_em
+    except Exception:
+        pass
+    ui_em = current_play_account()
+    if ui_em and (not dev_emails or ui_em in dev_emails):
+        return ui_em
+    return dev_emails[0] if dev_emails else (req or "current@device")
+
+
+def sync_account_context(real_email: str):
+    """Nguyên nhân 3 & 4: Đồng bộ tài khoản chủ sở hữu Google One trong localappstate.db, library.db và xóa dữ liệu phiên tài khoản cũ."""
+    if not real_email or real_email == "current@device" or "@" not in real_email:
+        clean_billing_cache()
+        return
+    import sqlite3
+    em = real_email.strip().lower()
+    sh("shell", f"am force-stop {VENDING}; am force-stop {PKG}", timeout=15)
+    # 1. Xóa database phiên Google One của các tài khoản khác để tránh Google One chạy nhầm tài khoản cũ
+    try:
+        g1_files = sh("shell", f"ls /data/data/{PKG}/databases/ 2>/dev/null").splitlines()
+        for f in g1_files:
+            f = f.strip()
+            if f.startswith("g1_sdk_database_") and em not in f.lower():
+                sh("shell", f"rm -f '/data/data/{PKG}/databases/{f}'", timeout=10)
+                note(f"Đã dọn database phiên Google One của tài khoản cũ: {f}")
+    except Exception:
+        pass
+    # 2. Cập nhật tài khoản sở hữu gói Google One trong localappstate.db (Finsky dùng bảng này để chọn Billing preferred account via installer)
+    remote_las = "/data/local/tmp/las_sync.db"
+    tmp_las = Path(tempfile.gettempdir()) / "las_sync.db"
+    try:
+        sh("shell", f"rm -f /data/data/{VENDING}/databases/localappstate.db-wal /data/data/{VENDING}/databases/localappstate.db-shm 2>/dev/null; cp /data/data/{VENDING}/databases/localappstate.db {remote_las} 2>/dev/null && chmod 666 {remote_las}", timeout=15)
+        if tmp_las.exists():
+            tmp_las.unlink()
+        sh("pull", remote_las, str(tmp_las), timeout=20)
+        if tmp_las.exists():
+            con = sqlite3.connect(str(tmp_las))
+            cur = con.cursor()
+            rows = cur.execute("select account from appstate where package_name = ?", (PKG,)).fetchall()
+            if rows and any((r[0] or "").lower() != em for r in rows):
+                cur.execute("update appstate set account = ?, account_for_update = ? where package_name = ?", (em, em, PKG))
+                con.commit()
+                con.close()
+                sh("push", str(tmp_las), remote_las, timeout=20)
+                sh("shell", f"cp {remote_las} /data/data/{VENDING}/databases/localappstate.db && rm -f {remote_las}", timeout=15)
+                ok(f"Đã đồng bộ chủ sở hữu Google One trong localappstate.db → {em}")
+            else:
+                con.close()
+    except Exception:
+        pass
+    finally:
+        try:
+            if tmp_las.exists():
+                tmp_las.unlink()
+        except Exception:
+            pass
+    # 3. Cập nhật CURRENT_ACTIVE_PHONESKY_ACCOUNT nếu có
+    try:
+        sh("shell", f"sed -i 's/CURRENT_ACTIVE_PHONESKY_ACCOUNT\">[^<]*</CURRENT_ACTIVE_PHONESKY_ACCOUNT\">{em}</g' /data/data/{VENDING}/shared_prefs/com.google.android.instantapps.installer.prefs.xml 2>/dev/null", timeout=10)
+    except Exception:
+        pass
+    # 4. Xóa cache sku_details.db và app_commerce_acquire_cache
+    clean_billing_cache()
+
+
+def ensure_subscription_resubscribed() -> bool:
+    """Nguyên nhân 1: Khi gói hiện tại bị Canceled (autoRenewing=false), tự mở trang Subscriptions của Play Store để bấm Resubscribe / Đăng ký lại."""
+    step("Kiểm tra & khôi phục trạng thái tự gia hạn (Resubscribe) trên Play Store")
+    sh("shell", f"am force-stop {VENDING}")
+    sh("shell", "am start -a android.intent.action.VIEW -d 'https://play.google.com/store/account/subscriptions'")
+    time.sleep(5)
+    for _ in range(4):
+        xml = ui_xml()
+        if not xml:
+            time.sleep(1.5)
+            continue
+        ns = list(nodes(xml))
+        # Nếu thấy nút Resubscribe / Đăng ký lại ngay trên trang danh sách hoặc chi tiết
+        for n in ns:
+            label = (n["text"] or n["desc"]).strip()
+            if any(k in label for k in ("Resubscribe", "Đăng ký lại", "重新订阅")) and (n["x"] or n["y"]):
+                note(f"Phát hiện nút '{label}' → Bấm để kích hoạt lại gói đăng ký")
+                tap(n["x"], n["y"])
+                time.sleep(3)
+                # Xác nhận trên hộp thoại / bottom sheet nếu có
+                xml2 = ui_xml()
+                ns2 = list(nodes(xml2))
+                for n2 in ns2:
+                    l2 = (n2["text"] or n2["desc"]).strip()
+                    if l2 in ("Resubscribe", "Đăng ký lại", "重新订阅", "Subscribe", "Đăng ký") and (n2["x"] or n2["y"]):
+                        tap(n2["x"], n2["y"])
+                        time.sleep(4)
+                        break
+                ok("Đã gửi lệnh Resubscribe để khôi phục trạng thái Active")
+                return True
+        # Nếu thấy dòng Google AI Pro / Google One bị Canceled thì bấm vào để mở trang chi tiết
+        for n in ns:
+            label = (n["text"] or n["desc"]).strip()
+            if any(k in label for k in ("Google AI Pro", "Google One")) and (n["x"] or n["y"]):
+                tap(n["x"], n["y"])
+                time.sleep(3)
+                break
+    return False
 
 
 def add_account(email, password, totp_secret="") -> bool:
@@ -502,7 +679,13 @@ def add_card(card: dict) -> bool:
 
 def current_play_account() -> str:
     """Đọc tài khoản Play hiện tại; đọc không được thì trả về chuỗi rỗng."""
-    for n in nodes(ui_xml()):
+    xml = ui_xml()
+    # Đọc nhanh từ content-desc của avatar ('Signed in as ... email@gmail.com') mà không cần bấm mở menu
+    for n in nodes(xml):
+        m = re.search(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+)", n["desc"] + " " + n["text"])
+        if m:
+            return m.group(1).lower()
+    for n in nodes(xml):
         if "Tài khoản và cài đặt" in n["desc"] or "账号和设置" in n["desc"] or "Account and settings" in n["desc"]:
             tap(n["x"], n["y"]); time.sleep(3); break
     best = ""
@@ -568,22 +751,28 @@ def build_js(plan: str = "auto", list_only: bool = False, stack: bool = False, o
     elif plan == "5x":
         js = js.replace('var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];',
                         'var PRODUCTS=["g1.play.20tb"];')
+    elif plan == "pro3":
+        # Google AI Pro 2TB/5TB (g1.2tb.ai.3months_eft): eft-3months
+        js = js.replace('var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];',
+                        'var PRODUCTS=["g1.2tb.ai.3months_eft"];')
+        js = js.replace('var PREFER="";', 'var PREFER="eft-3months";', 1)
     elif plan.startswith("pro"):
         # Google AI Pro 5TB (g1.2tb.ai.subs_variant）：12months-eft / 6months-eft / 6months-eft-2 / 6months-eft-ss-2026
         prefer = {"pro12": "12months-eft", "pro6": "6months-eft",
                   "pro6b": "6months-eft-2", "pro6c": "6months-eft-ss-2026"}.get(plan, "12months-eft")
+        prods = '["g1.2tb.ai.subs_variant","g1.2tb.ai.3months_eft"]' if list_only else '["g1.2tb.ai.subs_variant"]'
         js = js.replace('var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];',
-                        'var PRODUCTS=["g1.2tb.ai.subs_variant"];')
+                        f'var PRODUCTS={prods};')
         js = js.replace('var PREFER="";', 'var PREFER="%s";' % prefer, 1)
     return js
 
 
-def run_trial(pid: int, wait=25, plan="auto", list_only=False, stack=False, old_token="", stack_mode=None, password="") -> dict:
+def run_trial(pid: int, wait=25, plan="auto", list_only=False, stack=False, old_token="", stack_mode=None, password="", account_email="") -> dict:
     import frida
     step("Đang inject module thanh toán, tra dùng thử miễn phí")
     dev = frida.get_usb_device(timeout=10)
     sess = dev.attach(pid)
-    res = {"offers": [], "launched": None, "purchase": None, "errors": [], "list_done": False}
+    res = {"offers": [], "launched": None, "purchase": None, "old_purchase": None, "sub_canceled": False, "errors": [], "list_done": False}
 
     def on_msg(m, _):
         p = m.get("payload") or {}
@@ -594,6 +783,12 @@ def run_trial(pid: int, wait=25, plan="auto", list_only=False, stack=False, old_
             note(f"    token={p.get('token','')}")
         elif ev == "list_only":
             res["list_done"] = True
+        elif ev == "old_purchase":
+            res["old_purchase"] = p
+            note(f"Gói đang có trên Play Billing: token={p.get('head')}… | autoRenewing={p.get('autoRenewing')} | products={p.get('products')}")
+        elif ev == "sub_canceled":
+            res["sub_canceled"] = True
+            warn(f"Play Billing báo gói hiện tại đã bị HỦY GIA HẠN (autoRenewing=false, token={p.get('head')}…) — Nguyên nhân 1 gây lỗi ITEM_UNAVAILABLE!")
         elif ev == "launched":
             res["launched"] = p
             ok(f"Đã mở trang thanh toán:{p}")
@@ -617,7 +812,7 @@ def run_trial(pid: int, wait=25, plan="auto", list_only=False, stack=False, old_
                 break
             time.sleep(0.3)
         if not list_only and res["launched"] and res["launched"].get("code") == 0:
-            res["sheet"] = confirm_zero(password=password, frida_res=res)
+            res["sheet"] = confirm_zero(password=password, frida_res=res, account_email=account_email, old_token=old_token)
     finally:
         try:
             sess.detach()
@@ -670,11 +865,13 @@ def _tap_button(ns: list, labels: tuple) -> bool:
     return False
 
 
-def confirm_zero(wait=45, password="", frida_res=None) -> dict:
+def confirm_zero(wait=45, password="", frida_res=None, account_email="", old_token="") -> dict:
     step("Chờ Module thanh toán hiện lên để ấn Subscribe & kiểm tra kết quả")
     out = {"price": None, "confirmed": False, "ineligible": False, "success": False, "error": "", "text": ""}
     end_t = time.time() + wait
     tapped_at = 0.0
+    last_tap = 0.0
+    time.sleep(1.5)
     while time.time() < end_t:
         if frida_res and frida_res.get("purchase"):
             cb = frida_res["purchase"]
@@ -725,8 +922,8 @@ def confirm_zero(wait=45, password="", frida_res=None) -> dict:
                 continue
             # Nếu bảng Play Billing đã tự đóng sau khi ấn Subscribe (>4s) và không có lỗi
             if "com.android.vending" not in xml and (time.time() - tapped_at) > 4.0:
-                tok = read_purchase_token("subs_variant")
-                if tok:
+                tok = read_purchase_token("g1.2tb.ai.", account_email)
+                if tok and tok != old_token:
                     out["success"] = True
                     ok("Đã xác nhận gói đăng ký mới trong Play (Successful)!")
                     return out
@@ -756,12 +953,16 @@ def confirm_zero(wait=45, password="", frida_res=None) -> dict:
                     out["price"] = m.group(0)
                     out["error"] = f"non_zero_price:{m.group(0)}"
                     return out
+            if (time.time() - last_tap) < 5.0:
+                time.sleep(1.5)
+                continue
             note(f"Module thanh toán đã hiện → Ấn '{sub_btn['text'].strip()}' tại ({sub_btn['x']}, {sub_btn['y']})")
             tap(sub_btn["x"], sub_btn["y"])
             out["confirmed"] = True
+            last_tap = time.time()
             if not tapped_at:
-                tapped_at = time.time()
-            time.sleep(2.5)
+                tapped_at = last_tap
+            time.sleep(3.0)
             continue
 
         time.sleep(1.5)
@@ -783,13 +984,14 @@ def verify() -> str:
 
 # ---------- Quy trình 1 tài khoản ----------
 def process(email, password="", totp_secret="", add=True, card=None, plan="auto", no_switch=False, list_only=False, stack=False, old_token="", stack_mode=None) -> dict:
+    real_email = resolve_active_account(email)
     print("\n" + "=" * 56)
-    print(f"  Đang xử lý tài khoản:{email} (plan={plan}, stack={stack})")
+    print(f"  Đang xử lý tài khoản:{real_email} (plan={plan}, stack={stack})")
     print("=" * 56)
-    rec = {"email": email, "plan": plan, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "status": "unknown"}
+    rec = {"email": real_email, "requested_email": email, "plan": plan, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "status": "unknown"}
     if add:
         try:
-            if not add_account(email, password, totp_secret):
+            if not add_account(real_email, password, totp_secret):
                 rec["status"] = "add_account_failed"
                 return rec
         except Exception as e:
@@ -801,50 +1003,67 @@ def process(email, password="", totp_secret="", add=True, card=None, plan="auto"
             add_card(card)
         except Exception as e:
             warn(f"Gắn thẻ thất bại:{e}")
+
+    # Nguyên nhân 3 & 4: Đồng bộ ngữ cảnh tài khoản giữa Play Store & Google One, dọn cache sku_details.db
+    sync_account_context(real_email)
+
     if globals().get("SKIP_ACCOUNT_CHECK"):
-        ok("Đã bỏ qua kiểm tra tài khoản Play (--force)")
+        ok(f"Đã xác định & đồng bộ tài khoản đang dùng trên thiết bị: {real_email}")
     elif list_only:
-        cur = current_play_account()
+        cur = current_play_account() or real_email
         ok(f"Chế độ liệt kê: dùng tài khoản hiện tại trên thiết bị {cur or 'không rõ'} (không kiểm tra, không đặt mua)")
     elif no_switch:
         cur = current_play_account()
-        if cur != email.lower():
-            warn(f"Tài khoản Play hiện tại là {cur or 'không rõ'}, không phải {email}, dừng lại")
+        if cur != real_email.lower():
+            warn(f"Tài khoản Play hiện tại là {cur or 'không rõ'}, không phải {real_email}, dừng lại")
             rec["status"] = "wrong_account"
             return rec
         ok("Đã xác nhận tài khoản Play (chế độ chuyển tay)")
-    elif not switch_play(email):
+    elif not switch_play(real_email):
         rec["status"] = "play_account_switch_failed"
         return rec
-    if stack and not old_token:
-        note("Đang đọc purchaseToken của gói đăng ký hiện tại…")
-        old_token = read_purchase_token("subs_variant")
-        if old_token:
-            ok(f"Đã đọc được purchaseToken ({old_token[:16]}…), sẽ cộng dồn bằng chế độ nâng cấp gói đăng ký")
+
+    # Nguyên nhân 1 & 2: Kiểm tra trạng thái gói hiện tại của ĐÚNG tài khoản real_email
+    if not list_only:
+        pinfo = read_purchase_info("g1.2tb.ai.", real_email)
+        if pinfo["alive"] and not pinfo["auto_renewing"]:
+            warn("Nguyên nhân 1: Gói hiện tại đang ở trạng thái ĐÃ HỦY (Canceled / autoRenewing=false). Đang thử tự động Resubscribe...")
+            if ensure_subscription_resubscribed():
+                pinfo = read_purchase_info("g1.2tb.ai.", real_email)
+        if pinfo["alive"]:
+            if not old_token:
+                old_token = pinfo["token"]
+            if not stack:
+                note("Nguyên nhân 1: Tài khoản đã có gói đang hoạt động → Tự động bật chế độ nâng cấp cộng dồn (--stack) để tránh lỗi mua trùng SKU")
+                stack = True
+            ok(f"Dùng purchaseToken của {real_email} ({old_token[:16]}…) để cộng dồn gói đăng ký")
         else:
-            warn("Chưa có purchaseToken đang hoạt động, sẽ thử đăng ký gói mới")
+            if stack:
+                note(f"Tài khoản {real_email} chưa có gói đang hoạt động → Sẽ đăng ký gói mới (không gửi oldPurchaseToken rỗng/cũ)")
+            old_token = ""
 
     if not list_only:
-        ensure_vending(restart=True)
+        ensure_vending(restart=True, auth_account=real_email)
     pid = launch_app()
     if not pid:
         rec["status"] = "app_not_started"
         return rec
-    fr = run_trial(pid, plan=plan, list_only=list_only, stack=stack, old_token=old_token, stack_mode=stack_mode, password=password)
+    fr = run_trial(pid, plan=plan, list_only=list_only, stack=stack, old_token=old_token, stack_mode=stack_mode, password=password, account_email=real_email)
     rec.update(fr)
     if list_only:
         rec["status"] = "listed"
         return rec
     if fr["launched"] and fr["launched"].get("code") == 0:
-        sheet = fr.get("sheet") or confirm_zero(password=password, frida_res=fr)
+        sheet = fr.get("sheet") or confirm_zero(password=password, frida_res=fr, account_email=real_email, old_token=old_token)
         rec["sheet"] = sheet
         if sheet.get("success"):
             rec["status"] = "subscribed"
         elif sheet.get("error") or sheet.get("ineligible"):
             rec["status"] = "error"
+            clean_billing_cache()
             sh("shell", f"am force-stop {PKG}")
         else:
-            tok_after = read_purchase_token("subs_variant")
+            tok_after = read_purchase_token("g1.2tb.ai.", real_email)
             if tok_after and tok_after != old_token:
                 rec["status"] = "subscribed"
             else:
@@ -919,8 +1138,8 @@ def main():
     ap.add_argument("--no-add", action="store_true", help="Bỏ qua tự thêm tài khoản (tài khoản đã có trên điện thoại)")
     ap.add_argument("--no-switch", action="store_true",
                     help="Không tự chuyển tài khoản, chỉ kiểm tra tài khoản Play hiện tại có phải tài khoản cần dùng không")
-    ap.add_argument("--plan", default="auto", choices=["auto", "5x", "20x", "pro12", "pro6", "pro6b", "pro6c"],
-                    help="auto=tra cả hai gói rồi chọn gói dài nhất; 5x=Ultra 20TB; 20x=Ultra 30TB")
+    ap.add_argument("--plan", default="auto", choices=["auto", "5x", "20x", "pro12", "pro6", "pro6b", "pro6c", "pro3"],
+                    help="auto=tra cả hai gói rồi chọn gói dài nhất; 5x=Ultra 20TB; 20x=Ultra 30TB; pro3=g1.2tb.ai.3months_eft (eft-3months)")
     a = ap.parse_args()
 
     ADB = find_adb()
@@ -1101,10 +1320,21 @@ function launchWithStack(pd, offer){
       try{
         var list=Java.cast(purchases, Java.use("java.util.List"));
         S({ev:"purchases", n:list.size(), code:String(br.getResponseCode())});
-        if(list.size()===0){ S({ev:"no_purchase"}); launch(pd, offer); return; }
+        var fallbackTok = (typeof OLD_TOKEN !== "undefined" && OLD_TOKEN) ? String(OLD_TOKEN) : "";
+        if(list.size()===0){
+          S({ev:"no_purchase"});
+          launch(pd, offer, fallbackTok);
+          return;
+        }
         var pu=Java.cast(list.get(0), Java.use("com.android.billingclient.api.Purchase"));
         var tok=String(pu.getPurchaseToken());
-        S({ev:"old_purchase", head:tok.slice(0,16), products:String(pu.getProducts())});
+        var autoRen=true;
+        try{ autoRen=Boolean(pu.isAutoRenewing()); }catch(e){}
+        S({ev:"old_purchase", head:tok.slice(0,16), autoRenewing:autoRen, products:String(pu.getProducts())});
+        if(!autoRen){
+          S({ev:"sub_canceled", head:tok.slice(0,16), products:String(pu.getProducts())});
+        }
+        // Ưu tiên token sống trực tiếp từ Play Billing của tài khoản hiện tại
         launch(pd, offer, tok);
       }catch(e){ S({ev:"stack_query_err", m:String(e).slice(0,200)}); launch(pd, offer); }
     }}});
