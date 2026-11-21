@@ -18,9 +18,22 @@ accounts.txt Mỗi dòng một tài khoản:
 Script sẽ tự động: đẩy frida-server, đẩy module BillingClient, tra offer, dùng eft-12month để mở trang thanh toán,
 Chỉ bấm «Đăng ký» khi đã xác nhận số tiền là 0.
 """
-import argparse, base64, hashlib, hmac, json, os, re, select, struct, subprocess, sys, threading, time
-from pathlib import Path
+
+import argparse
+import base64
+import hashlib
+import hmac
+import json
+import os
+import re
+import select
+import struct
+import subprocess
+import sys
 import tempfile
+import threading
+import time
+from pathlib import Path
 
 # Cổng xác nhận thủ công: bản web bấm «Tôi đã hoàn tất, tiếp tục», dòng lệnh thì bấm Enter
 HUMAN_EVENT = threading.Event()
@@ -32,7 +45,10 @@ def wait_human(msg: str, timeout: int = 600) -> bool:
     WAITING["on"] = True
     WAITING["msg"] = msg
     print(f"\n⏸  Cần bạn thao tác:{msg}")
-    print("   Xong thì bấm 【Enter】 để tiếp tục (bản web bấm «Tôi đã hoàn tất, tiếp tục»)", flush=True)
+    print(
+        "   Xong thì bấm 【Enter】 để tiếp tục (bản web bấm «Tôi đã hoàn tất, tiếp tục»)",
+        flush=True,
+    )
     HUMAN_EVENT.clear()
     end = time.time() + timeout
     while time.time() < end:
@@ -49,12 +65,13 @@ def wait_human(msg: str, timeout: int = 600) -> bool:
     print("▶  Tiếp tục chạy", flush=True)
     return True
 
+
 # ---------- Hằng số ----------
-PKG = "com.google.android.apps.subscriptions.red"   # Google One
-VENDING = "com.android.vending"                     # Cửa hàng Play
+PKG = "com.google.android.apps.subscriptions.red"  # Google One
+VENDING = "com.android.vending"  # Cửa hàng Play
 GMS = "com.google.android.gms"
-PRODUCT = "g1.play.20tb"                            # Ultra 5x / 20TB
-OFFER = "eft-12month"                               # Miễn phí năm đầu
+PRODUCT = "g1.play.20tb"  # Ultra 5x / 20TB
+OFFER = "eft-12month"  # Miễn phí năm đầu
 MODULE_REMOTE = "/data/local/tmp/module_521.apk"
 FRIDA_REMOTE = "/data/local/tmp/frida-server"
 REPORT_DIR = Path("ultra0-report")
@@ -67,10 +84,13 @@ ADB_CANDIDATES = [
     r"C:\Program Files\Netease\MuMu\emulator\nemu\vmonitor\bin\adb_server.exe",
     r"C:\Program Files\Netease\MuMu\nx_main\adb.exe",
     r"C:\Program Files (x86)\Netease\MuMuPlayer-12.0\shell\adb.exe",
-    "adb.exe", "adb",
+    "adb.exe",
+    "adb",
     # macOS / Linux
     os.path.expanduser("~/Library/Android/sdk/platform-tools/adb"),
-    "/opt/homebrew/bin/adb", "/usr/local/bin/adb", "/usr/bin/adb",
+    "/opt/homebrew/bin/adb",
+    "/usr/local/bin/adb",
+    "/usr/bin/adb",
 ]
 
 
@@ -88,11 +108,13 @@ def find_adb() -> str:
     sys.exit("❌ Không tìm thấy adb, hãy cài Android platform-tools rồi thêm vào PATH")
 
 
-ADB = None
+ADB: str | None = None
 SERIAL = None
 
 
 def sh(*args, timeout=60, check=False, binary=False):
+    if ADB is None:
+        raise RuntimeError("ADB chưa được khởi tạo")
     cmd = [ADB] + (["-s", SERIAL] if SERIAL else []) + list(args)
     p = subprocess.run(cmd, capture_output=True, timeout=timeout)
     if check and p.returncode != 0:
@@ -134,7 +156,9 @@ def pick_device():
                 note(f"Đã kết nối giả lập 127.0.0.1:{port}")
                 break
     if not lines:
-        sys.exit("❌ Không phát hiện thiết bị. MuMu: hãy chắc chắn đã khởi động, đã bật gỡ lỗi ADB (trong Cài đặt), hoặc chỉ định adb bằng ADB_PATH.")
+        sys.exit(
+            "❌ Không phát hiện thiết bị. MuMu: hãy chắc chắn đã khởi động, đã bật gỡ lỗi ADB (trong Cài đặt), hoặc chỉ định adb bằng ADB_PATH."
+        )
     SERIAL = lines[0].split("\t")[0]
     ok(f"Đã kết nối thiết bị:{SERIAL}")
 
@@ -151,10 +175,17 @@ def ensure_root():
         # Thường gặp ở giả lập: adb root sẽ nâng quyền cho adbd, không cần su
         try:
             sh("root", timeout=20)
-            time.sleep(2)
-            uid = _id()
-            if "uid=0" in uid:
-                note("Đã nâng quyền bằng adb root")
+            for _ in range(4):
+                time.sleep(1.5)
+                if SERIAL and ":" in SERIAL:
+                    try:
+                        sh("connect", SERIAL, timeout=10)
+                    except Exception:
+                        pass
+                uid = _id()
+                if "uid=0" in uid:
+                    note("Đã nâng quyền bằng adb root")
+                    break
         except Exception:
             pass
     if "uid=0" not in uid:
@@ -163,28 +194,51 @@ def ensure_root():
         except Exception:
             uid = ""
     if "uid=0" not in uid:
-        sys.exit("❌ Thiết bị chưa có quyền root. MuMu: bật «Quyền ROOT» trong Cài đặt rồi khởi động lại; hoặc chạy tay adb root trước.")
+        sys.exit(
+            "❌ Thiết bị chưa có quyền root. MuMu: bật «Quyền ROOT» trong Cài đặt rồi khởi động lại; hoặc chạy tay adb root trước."
+        )
 
 
 def ensure_frida_server():
-    running = "frida-server" in sh("shell", "ps -A | grep frida-server || true")
-    if running:
-        ok("frida-server đang chạy")
-        return
+    ps_frida = sh(
+        "shell", "ps -A -o PID,ARGS | grep frida-server | grep -v grep || true"
+    )
+    if "frida-server" in ps_frida:
+        # Cần cờ -P (--disable-preload) để frida-server không tiêm frida-agent vào zygote64 gây treo Play Store trên MuMu Android 12
+        if " -P" in ps_frida or "--disable-preload" in ps_frida:
+            ok("frida-server đang chạy")
+            return
+        warn(
+            "frida-server đang chạy thiếu cờ -P (có thể gây treo Google Play), đang khởi động lại với -P…"
+        )
+        sh("shell", "killall frida-server 2>/dev/null || true", timeout=10)
+        time.sleep(1.5)
     if not sh("shell", f"ls {FRIDA_REMOTE} 2>/dev/null"):
-        warn("Trên thiết bị chưa có frida-server, đang thử tải tự động theo phiên bản frida trên máy…")
+        warn(
+            "Trên thiết bị chưa có frida-server, đang thử tải tự động theo phiên bản frida trên máy…"
+        )
         try:
             import frida
+
             ver = frida.__version__
         except Exception:
             sys.exit("❌ Máy tính chưa cài frida. Hãy chạy trước: pip3 install frida")
         abi = sh("shell", "getprop ro.product.cpu.abi").strip() or "arm64-v8a"
-        arch = {"arm64-v8a": "arm64", "armeabi-v7a": "arm", "armeabi": "arm",
-                "x86_64": "x86_64", "x86": "x86"}.get(abi, "arm64")
+        arch = {
+            "arm64-v8a": "arm64",
+            "armeabi-v7a": "arm",
+            "armeabi": "arm",
+            "x86_64": "x86_64",
+            "x86": "x86",
+        }.get(abi, "arm64")
         note(f"ABI thiết bị={abi} → frida-server-{ver}-android-{arch}")
-        url = (f"https://github.com/frida/frida/releases/download/{ver}/"
-               f"frida-server-{ver}-android-{arch}.xz")
-        import urllib.request, lzma
+        url = (
+            f"https://github.com/frida/frida/releases/download/{ver}/"
+            f"frida-server-{ver}-android-{arch}.xz"
+        )
+        import lzma
+        import urllib.request
+
         tmp = Path(tempfile.gettempdir()) / "frida-server.xz"
         note(f"Đang tải {url}")
         with urllib.request.urlopen(url, timeout=120) as r, open(tmp, "wb") as f:
@@ -196,24 +250,37 @@ def ensure_frida_server():
         sh("shell", f"chmod 755 {FRIDA_REMOTE}")
     is_root = "uid=0" in sh("shell", "id")
     if is_root:
-        sh("shell", f"nohup {FRIDA_REMOTE} -D >/dev/null 2>&1 &", timeout=15)
+        sh("shell", f"nohup {FRIDA_REMOTE} -P -D >/dev/null 2>&1 &", timeout=15)
     else:
-        sh("shell", f"su -c 'nohup {FRIDA_REMOTE} -D >/dev/null 2>&1 &'", timeout=15)
+        sh("shell", f"su -c 'nohup {FRIDA_REMOTE} -P -D >/dev/null 2>&1 &'", timeout=15)
     for _ in range(20):
         time.sleep(0.5)
         if "frida-server" in sh("shell", "ps -A | grep frida-server || true"):
-            ok("frida-server đã khởi động")
+            ok("frida-server đã khởi động (-P)")
             return
     sys.exit("❌ Khởi động frida-server thất bại")
 
 
 def read_purchase_info(sku_short: str, account_email: str = "") -> dict:
     """Đọc chi tiết gói đăng ký hiện tại của đúng tài khoản từ library.db (tránh lấy nhầm token của tài khoản khác & kiểm tra autoRenewing)."""
-    import tempfile, sqlite3, json as _json
-    info = {"token": "", "account": "", "alive": False, "auto_renewing": True, "valid_until": 0}
+    import json as _json
+    import sqlite3
+    import tempfile
+
+    info = {
+        "token": "",
+        "account": "",
+        "alive": False,
+        "auto_renewing": True,
+        "valid_until": 0,
+    }
     remote = "/data/local/tmp/lib_read.db"
     try:
-        sh("shell", f"cp /data/data/{VENDING}/databases/library.db {remote} 2>/dev/null; chmod 666 {remote}", timeout=30)
+        sh(
+            "shell",
+            f"cp /data/data/{VENDING}/databases/library.db {remote} 2>/dev/null; chmod 666 {remote}",
+            timeout=30,
+        )
     except Exception:
         pass
     tmp = Path(tempfile.gettempdir()) / "lib_read.db"
@@ -272,8 +339,14 @@ def read_purchase_info(sku_short: str, account_email: str = "") -> dict:
                 }
         if picked:
             info.update(picked)
-            state_str = "Đang hoạt động (Active)" if picked["auto_renewing"] else "ĐÃ HỦY GIA HẠN (Canceled / autoRenewing=false)"
-            note(f"Gói hiện tại trong library.db: tài khoản={picked['account']} | trạng thái={state_str}")
+            state_str = (
+                "Đang hoạt động (Active)"
+                if picked["auto_renewing"]
+                else "ĐÃ HỦY GIA HẠN (Canceled / autoRenewing=false)"
+            )
+            note(
+                f"Gói hiện tại trong library.db: tài khoản={picked['account']} | trạng thái={state_str}"
+            )
         con.close()
     except Exception as e:
         warn(f"Đọc library.db thất bại:{e}")
@@ -303,27 +376,57 @@ def clean_billing_cache():
     )
 
 
+def _vending_alive_pid() -> str:
+    """Trả về PID đang sống (loại trừ tiến trình zombie 'Z') của com.android.vending."""
+    out = sh(
+        "shell",
+        "ps -A -o PID,STAT,ARGS | grep 'com.android.vending' | grep -v grep || true",
+        timeout=10,
+    )
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[2] == VENDING and not parts[1].startswith("Z"):
+            return parts[0]
+    return ""
+
+
 def ensure_vending(restart: bool = False, auth_account: str = ""):
     """BillingClient cần tiến trình Cửa hàng Play đang chạy, nếu không queryProductDetails sẽ không bao giờ gọi lại."""
     if restart:
         sh("shell", f"am force-stop {VENDING}")
         clean_billing_cache()
         time.sleep(1)
-    if sh("shell", f"pidof {VENDING}"):
+    if _vending_alive_pid():
         ok("Tiến trình Cửa hàng Play đang chạy")
         return
     warn("Cửa hàng Play chưa chạy, đang mở lên…")
-    if auth_account and "@" in auth_account and auth_account != "current@device":
-        sh("shell", f"am start -n {VENDING}/com.google.android.finsky.activities.MainActivity --es authAccount {auth_account}", timeout=30)
+    multi_acc = len(device_google_emails()) > 1
+    if (
+        multi_acc
+        and auth_account
+        and "@" in auth_account
+        and auth_account != "current@device"
+    ):
+        sh(
+            "shell",
+            f"am start -n {VENDING}/com.google.android.finsky.activities.MainActivity --es authAccount {auth_account}",
+            timeout=30,
+        )
     else:
-        sh("shell", f"monkey -p {VENDING} -c android.intent.category.LAUNCHER 1", timeout=30)
+        sh(
+            "shell",
+            f"monkey -p {VENDING} -c android.intent.category.LAUNCHER 1",
+            timeout=30,
+        )
     for _ in range(20):
         time.sleep(1)
-        if sh("shell", f"pidof {VENDING}"):
+        if _vending_alive_pid():
             ok("Cửa hàng Play đã mở lên")
             time.sleep(2)
             return
-    warn("Cửa hàng Play chưa mở lên, truy vấn thanh toán có thể bị kẹt (thử mở tay Cửa hàng Play hoặc khởi động lại giả lập)")
+    warn(
+        "Cửa hàng Play chưa mở lên, truy vấn thanh toán có thể bị kẹt (thử mở tay Cửa hàng Play hoặc khởi động lại giả lập)"
+    )
 
 
 def ensure_module_apk():
@@ -340,7 +443,11 @@ def ensure_module_apk():
 def ensure_network():
     # Tắt animation hệ thống để uiautomator dump phản hồi tức thì, không bị treo khi có hiệu ứng chuyển cảnh
     try:
-        sh("shell", "settings put global window_animation_scale 0; settings put global transition_animation_scale 0; settings put global animator_duration_scale 0", timeout=10)
+        sh(
+            "shell",
+            "settings put global window_animation_scale 0; settings put global transition_animation_scale 0; settings put global animator_duration_scale 0",
+            timeout=10,
+        )
     except Exception:
         pass
     proxy = sh("shell", "settings get global http_proxy")
@@ -357,7 +464,11 @@ def ensure_network():
 # ---------- UI ----------
 def ui_xml() -> str:
     try:
-        sh("shell", "rm -f /sdcard/ui.xml && uiautomator dump --compressed /sdcard/ui.xml >/dev/null 2>&1", timeout=12)
+        sh(
+            "shell",
+            "rm -f /sdcard/ui.xml && uiautomator dump --compressed /sdcard/ui.xml >/dev/null 2>&1",
+            timeout=12,
+        )
         return sh("shell", "cat /sdcard/ui.xml 2>/dev/null", timeout=10)
     except Exception:
         return ""
@@ -390,7 +501,11 @@ def tap_text(*needles, exact=False) -> bool:
         label = n["text"] or n["desc"]
         if not label:
             continue
-        hit = (label == needles[0]) if exact and needles else any(k in label for k in needles)
+        hit = (
+            (label == needles[0])
+            if exact and needles
+            else any(k in label for k in needles)
+        )
         if hit and (n["x"] or n["y"]):
             tap(n["x"], n["y"])
             return True
@@ -418,7 +533,7 @@ def totp(secret: str, digits=6, period=30) -> str:
     ctr = int(time.time()) // period
     mac = hmac.new(key, struct.pack(">Q", ctr), hashlib.sha1).digest()
     off = mac[-1] & 0x0F
-    code = (struct.unpack(">I", mac[off:off + 4])[0] & 0x7FFFFFFF) % (10 ** digits)
+    code = (struct.unpack(">I", mac[off : off + 4])[0] & 0x7FFFFFFF) % (10**digits)
     return str(code).zfill(digits)
 
 
@@ -450,9 +565,15 @@ def resolve_active_account(requested_email: str) -> str:
         return dev_emails[0]
     # Nếu có nhiều tài khoản trên thiết bị, ưu tiên đọc từ finsky.xml (last-session-activity-time mới nhất)
     try:
-        finsky = sh("shell", f"cat /data/data/{VENDING}/shared_prefs/finsky.xml 2>/dev/null", timeout=10)
+        finsky = sh(
+            "shell",
+            f"cat /data/data/{VENDING}/shared_prefs/finsky.xml 2>/dev/null",
+            timeout=10,
+        )
         best_em, best_ts = "", -1
-        for m in re.finditer(r'name="last-session-activity-time:([^"]+)"\s+value="(\d+)"', finsky):
+        for m in re.finditer(
+            r'name="last-session-activity-time:([^"]+)"\s+value="(\d+)"', finsky
+        ):
             em, ts = m.group(1).strip().lower(), int(m.group(2))
             if (not dev_emails or em in dev_emails) and ts > best_ts:
                 best_em, best_ts = em, ts
@@ -466,17 +587,31 @@ def resolve_active_account(requested_email: str) -> str:
     return dev_emails[0] if dev_emails else (req or "current@device")
 
 
-def sync_account_context(real_email: str):
-    """Nguyên nhân 3 & 4: Đồng bộ tài khoản chủ sở hữu Google One trong localappstate.db, library.db và xóa dữ liệu phiên tài khoản cũ."""
+def sync_account_context(real_email: str) -> bool:
+    """Nguyên nhân 3 & 4: Đồng bộ tài khoản chủ sở hữu Google One trong localappstate.db và xóa dữ liệu phiên tài khoản cũ.
+    Chỉ force-stop / yêu cầu khởi động lại Play Store khi tài khoản thực sự thay đổi hoặc cần cập nhật DB, tránh tắt/mở lại khi Play đã chạy đúng tài khoản."""
     if not real_email or real_email == "current@device" or "@" not in real_email:
-        clean_billing_cache()
-        return
+        return False
     import sqlite3
+
     em = real_email.strip().lower()
-    sh("shell", f"am force-stop {VENDING}; am force-stop {PKG}", timeout=15)
+    need_vending_restart = False
+    # Kiểm tra xem có chuyển sang tài khoản khác so với lần chạy gần nhất không
+    last_acc_file = "/data/local/tmp/ultra0_last_acc.txt"
+    prev_acc = (
+        sh("shell", f"cat {last_acc_file} 2>/dev/null || true", timeout=10)
+        .strip()
+        .lower()
+    )
+    if prev_acc and prev_acc != em:
+        need_vending_restart = True
+
+    sh("shell", f"am force-stop {PKG}", timeout=15)
     # 1. Xóa database phiên Google One của các tài khoản khác để tránh Google One chạy nhầm tài khoản cũ
     try:
-        g1_files = sh("shell", f"ls /data/data/{PKG}/databases/ 2>/dev/null").splitlines()
+        g1_files = sh(
+            "shell", f"ls /data/data/{PKG}/databases/ 2>/dev/null"
+        ).splitlines()
         for f in g1_files:
             f = f.strip()
             if f.startswith("g1_sdk_database_") and em not in f.lower():
@@ -484,27 +619,53 @@ def sync_account_context(real_email: str):
                 note(f"Đã dọn database phiên Google One của tài khoản cũ: {f}")
     except Exception:
         pass
-    # 2. Cập nhật tài khoản sở hữu gói Google One trong localappstate.db (Finsky dùng bảng này để chọn Billing preferred account via installer)
+    # 2. Kiểm tra (chỉ đọc trước) chủ sở hữu Google One trong localappstate.db; chỉ dừng Play & ghi lại nếu khác email
     remote_las = "/data/local/tmp/las_sync.db"
     tmp_las = Path(tempfile.gettempdir()) / "las_sync.db"
     try:
-        sh("shell", f"rm -f /data/data/{VENDING}/databases/localappstate.db-wal /data/data/{VENDING}/databases/localappstate.db-shm 2>/dev/null; cp /data/data/{VENDING}/databases/localappstate.db {remote_las} 2>/dev/null && chmod 666 {remote_las}", timeout=15)
+        sh(
+            "shell",
+            f"cp /data/data/{VENDING}/databases/localappstate.db {remote_las} 2>/dev/null && chmod 666 {remote_las}",
+            timeout=15,
+        )
         if tmp_las.exists():
             tmp_las.unlink()
         sh("pull", remote_las, str(tmp_las), timeout=20)
         if tmp_las.exists():
             con = sqlite3.connect(str(tmp_las))
             cur = con.cursor()
-            rows = cur.execute("select account from appstate where package_name = ?", (PKG,)).fetchall()
+            rows = cur.execute(
+                "select account from appstate where package_name = ?", (PKG,)
+            ).fetchall()
             if rows and any((r[0] or "").lower() != em for r in rows):
-                cur.execute("update appstate set account = ?, account_for_update = ? where package_name = ?", (em, em, PKG))
+                need_vending_restart = True
+                sh("shell", f"am force-stop {VENDING}", timeout=15)
+                owner = sh(
+                    "shell",
+                    f"stat -c %u:%g /data/data/{VENDING}/databases/localappstate.db 2>/dev/null || true",
+                    timeout=10,
+                ).strip()
+                cur.execute(
+                    "update appstate set account = ?, account_for_update = ? where package_name = ?",
+                    (em, em, PKG),
+                )
                 con.commit()
                 con.close()
                 sh("push", str(tmp_las), remote_las, timeout=20)
-                sh("shell", f"cp {remote_las} /data/data/{VENDING}/databases/localappstate.db && rm -f {remote_las}", timeout=15)
+                chown_cmd = (
+                    f" && chown {owner} /data/data/{VENDING}/databases/localappstate.db"
+                    if owner and ":" in owner
+                    else ""
+                )
+                sh(
+                    "shell",
+                    f"rm -f /data/data/{VENDING}/databases/localappstate.db-wal /data/data/{VENDING}/databases/localappstate.db-shm 2>/dev/null; cp {remote_las} /data/data/{VENDING}/databases/localappstate.db && chmod 660 /data/data/{VENDING}/databases/localappstate.db{chown_cmd} && rm -f {remote_las}",
+                    timeout=15,
+                )
                 ok(f"Đã đồng bộ chủ sở hữu Google One trong localappstate.db → {em}")
             else:
                 con.close()
+                sh("shell", f"rm -f {remote_las} 2>/dev/null", timeout=10)
     except Exception:
         pass
     finally:
@@ -513,21 +674,56 @@ def sync_account_context(real_email: str):
                 tmp_las.unlink()
         except Exception:
             pass
-    # 3. Cập nhật CURRENT_ACTIVE_PHONESKY_ACCOUNT nếu có
+    # 3. Chỉ cập nhật CURRENT_ACTIVE_PHONESKY_ACCOUNT nếu file tồn tại và đang ghi email khác (giữ nguyên quyền chủ sở hữu)
+    prefs_path = f"/data/data/{VENDING}/shared_prefs/com.google.android.instantapps.installer.prefs.xml"
     try:
-        sh("shell", f"sed -i 's/CURRENT_ACTIVE_PHONESKY_ACCOUNT\">[^<]*</CURRENT_ACTIVE_PHONESKY_ACCOUNT\">{em}</g' /data/data/{VENDING}/shared_prefs/com.google.android.instantapps.installer.prefs.xml 2>/dev/null", timeout=10)
+        prefs_txt = sh("shell", f"cat {prefs_path} 2>/dev/null || true", timeout=10)
+        m_pref = re.search(r'CURRENT_ACTIVE_PHONESKY_ACCOUNT">([^<]+)<', prefs_txt)
+        if m_pref and m_pref.group(1).strip().lower() != em:
+            need_vending_restart = True
+            sh("shell", f"am force-stop {VENDING}", timeout=15)
+            owner_p = sh(
+                "shell", f"stat -c %u:%g {prefs_path} 2>/dev/null || true", timeout=10
+            ).strip()
+            chown_p = (
+                f" && chown {owner_p} {prefs_path}"
+                if owner_p and ":" in owner_p
+                else ""
+            )
+            sh(
+                "shell",
+                f"sed -i 's/CURRENT_ACTIVE_PHONESKY_ACCOUNT\">[^<]*</CURRENT_ACTIVE_PHONESKY_ACCOUNT\">{em}</g' {prefs_path}{chown_p} 2>/dev/null",
+                timeout=10,
+            )
     except Exception:
         pass
-    # 4. Xóa cache sku_details.db và app_commerce_acquire_cache
-    clean_billing_cache()
+    # 4. Chỉ xóa cache Play Store khi đổi tài khoản hoặc Play chưa chạy
+    if need_vending_restart or not _vending_alive_pid():
+        sh("shell", f"am force-stop {VENDING}", timeout=15)
+        clean_billing_cache()
+        need_vending_restart = True
+    try:
+        sh("shell", f"printf '%s' '{em}' > {last_acc_file}", timeout=10)
+    except Exception:
+        pass
+    return need_vending_restart
 
 
-def ensure_subscription_resubscribed() -> bool:
-    """Nguyên nhân 1: Khi gói hiện tại bị Canceled (autoRenewing=false), tự mở trang Subscriptions của Play Store để bấm Resubscribe / Đăng ký lại."""
+def ensure_subscription_resubscribed(auto_subscribe: bool = False) -> bool:
+    """Nguyên nhân 1: Khi gói hiện tại bị Canceled (autoRenewing=false), mở trang Subscriptions để Resubscribe (chỉ tự bấm khi bật --auto-subcribe)."""
+    if not auto_subscribe:
+        warn(
+            "Gói hiện tại đang ở trạng thái ĐÃ HỦY (autoRenewing=false), nhưng chưa bật --auto-subcribe nên KHÔNG tự bấm Resubscribe."
+        )
+        return False
     step("Kiểm tra & khôi phục trạng thái tự gia hạn (Resubscribe) trên Play Store")
     sh("shell", f"am force-stop {VENDING}")
-    sh("shell", "am start -a android.intent.action.VIEW -d 'https://play.google.com/store/account/subscriptions'")
+    sh(
+        "shell",
+        "am start -a android.intent.action.VIEW -d 'https://play.google.com/store/account/subscriptions'",
+    )
     time.sleep(5)
+    resub_labels = ("Resubscribe", "Đăng ký lại", "重新订阅")
     for _ in range(4):
         xml = ui_xml()
         if not xml:
@@ -537,16 +733,23 @@ def ensure_subscription_resubscribed() -> bool:
         # Nếu thấy nút Resubscribe / Đăng ký lại ngay trên trang danh sách hoặc chi tiết
         for n in ns:
             label = (n["text"] or n["desc"]).strip()
-            if any(k in label for k in ("Resubscribe", "Đăng ký lại", "重新订阅")) and (n["x"] or n["y"]):
+            if any(k in label for k in resub_labels) and (n["x"] or n["y"]):
                 note(f"Phát hiện nút '{label}' → Bấm để kích hoạt lại gói đăng ký")
                 tap(n["x"], n["y"])
                 time.sleep(3)
-                # Xác nhận trên hộp thoại / bottom sheet nếu có
+                # Xác nhận trên hộp thoại / bottom sheet nếu có (chỉ bấm đúng nút Resubscribe, tuyệt đối không bấm Subscribe trả phí mới)
                 xml2 = ui_xml()
                 ns2 = list(nodes(xml2))
+                txt2 = " ".join(x["text"].strip() for x in ns2 if x["text"].strip())
+                paid_now = _detect_paid_today(txt2)
+                if paid_now:
+                    warn(
+                        f"Hộp thoại Resubscribe hiển thị thu phí hôm nay ({paid_now}) — hủy thao tác!"
+                    )
+                    return False
                 for n2 in ns2:
                     l2 = (n2["text"] or n2["desc"]).strip()
-                    if l2 in ("Resubscribe", "Đăng ký lại", "重新订阅", "Subscribe", "Đăng ký") and (n2["x"] or n2["y"]):
+                    if l2 in resub_labels and (n2["x"] or n2["y"]):
                         tap(n2["x"], n2["y"])
                         time.sleep(4)
                         break
@@ -555,7 +758,9 @@ def ensure_subscription_resubscribed() -> bool:
         # Nếu thấy dòng Google AI Pro / Google One bị Canceled thì bấm vào để mở trang chi tiết
         for n in ns:
             label = (n["text"] or n["desc"]).strip()
-            if any(k in label for k in ("Google AI Pro", "Google One")) and (n["x"] or n["y"]):
+            if any(k in label for k in ("Google AI Pro", "Google One")) and (
+                n["x"] or n["y"]
+            ):
                 tap(n["x"], n["y"])
                 time.sleep(3)
                 break
@@ -568,29 +773,36 @@ def add_account(email, password, totp_secret="") -> bool:
     before = len(accounts_on_device())
     sh("shell", "am start -a android.settings.ADD_ACCOUNT_SETTINGS")
     time.sleep(3)
-    tap_text("Google", exact=True) or tap_text("Google")
+    if not tap_text("Google", exact=True):
+        tap_text("Google")
     time.sleep(5)
 
     pos = find_edit()
     if pos:
-        for _ in range(3):                      # Nhập xong đọc lại để kiểm tra, tránh bị nuốt ký tự
-            tap(*pos); time.sleep(0.8)
-            sh("shell", "input keyevent 123")   # Đưa con trỏ về cuối dòng
+        for _ in range(3):  # Nhập xong đọc lại để kiểm tra, tránh bị nuốt ký tự
+            tap(*pos)
+            time.sleep(0.8)
+            sh("shell", "input keyevent 123")  # Đưa con trỏ về cuối dòng
             for _ in range(60):
                 sh("shell", "input keyevent 67")  # Xóa bằng phím Backspace
-            type_text(email); time.sleep(1)
+            type_text(email)
+            time.sleep(1)
             cur = " ".join(n["text"] for n in nodes(ui_xml()) if "@" in n["text"])
             if email.lower() in cur.lower():
                 break
             warn(f"Bị nuốt ký tự khi nhập, thử lại (hiện tại: {cur[:40]})")
         else:
             warn("Nhập email nhiều lần vẫn chưa đầy đủ")
-        tap_text("Tiếp theo", "下一步", "Next"); time.sleep(6)
+        tap_text("Tiếp theo", "下一步", "Next")
+        time.sleep(6)
 
     if find_edit():
-        tap(*find_edit()); time.sleep(1)
-        type_text(password); time.sleep(1)
-        tap_text("Tiếp theo", "下一步", "Next"); time.sleep(7)
+        tap(*find_edit())
+        time.sleep(1)
+        type_text(password)
+        time.sleep(1)
+        tap_text("Tiếp theo", "下一步", "Next")
+        time.sleep(7)
 
     # Tiến từng bước: giao diện đã biết thì tự bấm, giao diện lạ/xác minh thì giao cho người
     unknown_rounds = 0
@@ -601,40 +813,89 @@ def add_account(email, password, totp_secret="") -> bool:
         xml = ui_xml()
         text = " ".join(n["text"] for n in nodes(xml) if n["text"])
 
-        if "Tài khoản này đã có trên thiết bị của bạn" in text or "此账号已在您的设备上" in text or "already on your device" in text.lower():
+        if (
+            "Tài khoản này đã có trên thiết bị của bạn" in text
+            or "此账号已在您的设备上" in text
+            or "already on your device" in text.lower()
+        ):
             ok("Tài khoản đã có trên thiết bị")
             return True
-        if "Không tìm thấy tài khoản này" in text or "找不到此账号" in text or "Couldn't find your Google Account" in text:
-            warn("Google báo không tìm thấy tài khoản này (kiểm tra lại chính tả email)")
+        if (
+            "Không tìm thấy tài khoản này" in text
+            or "找不到此账号" in text
+            or "Couldn't find your Google Account" in text
+        ):
+            warn(
+                "Google báo không tìm thấy tài khoản này (kiểm tra lại chính tả email)"
+            )
             return False
-        if "Mật khẩu không chính xác" in text or "密码不正确" in text or "Wrong password" in text:
+        if (
+            "Mật khẩu không chính xác" in text
+            or "密码不正确" in text
+            or "Wrong password" in text
+        ):
             warn("Mật khẩu không chính xác")
             return False
 
-        if ("Xác minh 2 bước" in text or "两步验证" in text or "2-Step" in text or "Nhập mã xác minh" in text or "输入验证码" in text):
+        if (
+            "Xác minh 2 bước" in text
+            or "两步验证" in text
+            or "2-Step" in text
+            or "Nhập mã xác minh" in text
+            or "输入验证码" in text
+        ):
             if totp_secret and find_edit():
                 code = totp(totp_secret)
                 note(f"Mã xác minh 2FA:{code}")
-                tap(*find_edit()); type_text(code); time.sleep(1)
-                tap_text("Tiếp theo", "下一步", "Next"); time.sleep(8)
+                tap(*find_edit())
+                type_text(code)
+                time.sleep(1)
+                tap_text("Tiếp theo", "下一步", "Next")
+                time.sleep(8)
                 continue
-            wait_human("Trên điện thoại hiện xác minh 2 bước, hãy nhập mã xác minh trên điện thoại để hoàn tất", 300)
+            wait_human(
+                "Trên điện thoại hiện xác minh 2 bước, hãy nhập mã xác minh trên điện thoại để hoàn tất",
+                300,
+            )
             continue
 
         if tap_text("Để sau", "以后再说", "Not now"):
-            time.sleep(3); continue
+            time.sleep(3)
+            continue
         if tap_text("Tôi đồng ý", "我同意", "I agree"):
-            time.sleep(5); continue
+            time.sleep(5)
+            continue
         if tap_text("Hủy", "Bỏ qua", "取消", "Skip", "跳过"):
-            time.sleep(2); continue
+            time.sleep(2)
+            continue
 
-        if any(k in text for k in ("Chứng minh bạn không phải là chương trình tự động", "证明您不是自动程序", "Xác minh danh tính", "验证身份", "Nhập số điện thoại", "请输入电话号码", "Không thể xác minh", "无法验证", "Xác nhận đây là bạn", "确认是您本人")):
-            wait_human("Trên điện thoại hiện xác minh người-máy/xác minh danh tính, hãy hoàn tất thủ công trên điện thoại", 300)
+        if any(
+            k in text
+            for k in (
+                "Chứng minh bạn không phải là chương trình tự động",
+                "证明您不是自动程序",
+                "Xác minh danh tính",
+                "验证身份",
+                "Nhập số điện thoại",
+                "请输入电话号码",
+                "Không thể xác minh",
+                "无法验证",
+                "Xác nhận đây là bạn",
+                "确认是您本人",
+            )
+        ):
+            wait_human(
+                "Trên điện thoại hiện xác minh người-máy/xác minh danh tính, hãy hoàn tất thủ công trên điện thoại",
+                300,
+            )
             continue
 
         unknown_rounds += 1
         if unknown_rounds >= 8:
-            wait_human("Script không nhận ra giao diện hiện tại, hãy tự thêm tài khoản thủ công, xong rồi tiếp tục", 300)
+            wait_human(
+                "Script không nhận ra giao diện hiện tại, hãy tự thêm tài khoản thủ công, xong rồi tiếp tục",
+                300,
+            )
             unknown_rounds = 0
         time.sleep(2)
 
@@ -649,11 +910,23 @@ def add_card(card: dict) -> bool:
     """Thêm một thẻ trong Google Pay (số thẻ/ngày hết hạn/CVC/chủ thẻ/mã bưu chính)."""
     if not card:
         return True
-    step(f"Đang thêm phương thức thanh toán:{card['number'][-4:].rjust(len(card['number']), '*')}")
-    sh("shell", "am start -a android.intent.action.VIEW "
-                "-d 'https://pay.google.com/gp/w/u/0/home/paymentmethods'")
+    step(
+        f"Đang thêm phương thức thanh toán:{card['number'][-4:].rjust(len(card['number']), '*')}"
+    )
+    sh(
+        "shell",
+        "am start -a android.intent.action.VIEW "
+        "-d 'https://pay.google.com/gp/w/u/0/home/paymentmethods'",
+    )
     time.sleep(10)
-    if not tap_text("Thêm phương thức thanh toán", "Add a payment method", "添加付款方式", "Thêm thẻ tín dụng", "添加信用卡", "Add card"):
+    if not tap_text(
+        "Thêm phương thức thanh toán",
+        "Add a payment method",
+        "添加付款方式",
+        "Thêm thẻ tín dụng",
+        "添加信用卡",
+        "Add card",
+    ):
         warn("Không tìm thấy chỗ thêm, bỏ qua bước gắn thẻ (có thể thêm tay)")
         return False
     time.sleep(9)
@@ -661,14 +934,23 @@ def add_card(card: dict) -> bool:
     edits = [n for n in nodes(ui_xml()) if "EditText" in n["cls"]]
     mm = re.sub(r"\D", "", card["exp"])[:2] or "01"
     yy = re.sub(r"\D", "", card["exp"])[2:][-2:] or "30"
-    seq = [card["number"], mm, yy, card["cvc"], card["holder"] or "CARD HOLDER",
-           "123 Main St", "Portland"]
+    seq = [
+        card["number"],
+        mm,
+        yy,
+        card["cvc"],
+        card["holder"] or "CARD HOLDER",
+        "123 Main St",
+        "Portland",
+    ]
     for i, val in enumerate(seq):
         edits = [n for n in nodes(ui_xml()) if "EditText" in n["cls"]]
         if i >= len(edits):
             break
-        tap(edits[i]["x"], edits[i]["y"]); time.sleep(0.6)
-        type_text(val); time.sleep(0.5)
+        tap(edits[i]["x"], edits[i]["y"])
+        time.sleep(0.6)
+        type_text(val)
+        time.sleep(0.5)
     if not tap_text("Lưu", "Save", "保存"):
         wait_human("Hãy bấm tay «Lưu» để hoàn tất gắn thẻ, rồi tiếp tục", 240)
     else:
@@ -682,17 +964,28 @@ def current_play_account() -> str:
     xml = ui_xml()
     # Đọc nhanh từ content-desc của avatar ('Signed in as ... email@gmail.com') mà không cần bấm mở menu
     for n in nodes(xml):
-        m = re.search(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+)", n["desc"] + " " + n["text"])
+        m = re.search(
+            r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+)", n["desc"] + " " + n["text"]
+        )
         if m:
             return m.group(1).lower()
     for n in nodes(xml):
-        if "Tài khoản và cài đặt" in n["desc"] or "账号和设置" in n["desc"] or "Account and settings" in n["desc"]:
-            tap(n["x"], n["y"]); time.sleep(3); break
+        if (
+            "Tài khoản và cài đặt" in n["desc"]
+            or "账号和设置" in n["desc"]
+            or "Account and settings" in n["desc"]
+        ):
+            tap(n["x"], n["y"])
+            time.sleep(3)
+            break
     best = ""
     for n in nodes(ui_xml()):
-        m = re.search(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+)", n["desc"] + " " + n["text"])
+        m = re.search(
+            r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+)", n["desc"] + " " + n["text"]
+        )
         if m:
-            best = m.group(1).lower(); break
+            best = m.group(1).lower()
+            break
     sh("shell", "input keyevent 4")
     return best
 
@@ -703,25 +996,42 @@ def switch_play(email) -> bool:
     want = email.lower()
     sh("shell", f"am force-stop {VENDING}")
     sh("shell", f"am force-stop {PKG}")
-    sh("shell", f"am start -n {VENDING}/com.google.android.finsky.activities.MainActivity "
-                f"--es authAccount {email}")
+    sh(
+        "shell",
+        f"am start -n {VENDING}/com.google.android.finsky.activities.MainActivity "
+        f"--es authAccount {email}",
+    )
     time.sleep(9)
     if current_play_account() == want:
-        ok("Đã xác nhận tài khoản Play"); return True
+        ok("Đã xác nhận tài khoản Play")
+        return True
     for n in nodes(ui_xml()):
-        if "Tài khoản và cài đặt" in n["desc"] or "账号和设置" in n["desc"] or "Account and settings" in n["desc"]:
-            tap(n["x"], n["y"]); time.sleep(3); break
+        if (
+            "Tài khoản và cài đặt" in n["desc"]
+            or "账号和设置" in n["desc"]
+            or "Account and settings" in n["desc"]
+        ):
+            tap(n["x"], n["y"])
+            time.sleep(3)
+            break
     for n in nodes(ui_xml()):
         if "Mở rộng danh sách tài khoản" in n["desc"] or "展开账号列表" in n["desc"]:
-            tap(n["x"], n["y"]); time.sleep(3); break
+            tap(n["x"], n["y"])
+            time.sleep(3)
+            break
     for n in nodes(ui_xml()):
         if want in (n["text"] + " " + n["desc"]).lower():
-            tap(n["x"], n["y"]); time.sleep(6); break
+            tap(n["x"], n["y"])
+            time.sleep(6)
+            break
     sh("shell", "input keyevent 4")
     got = current_play_account()
     if got == want:
-        ok("Đã xác nhận tài khoản Play"); return True
-    warn(f"Chưa chuyển được tài khoản Play (hiện tại: {got or 'không rõ'}) — dừng lại để tránh chạy nhầm tài khoản")
+        ok("Đã xác nhận tài khoản Play")
+        return True
+    warn(
+        f"Chưa chuyển được tài khoản Play (hiện tại: {got or 'không rõ'}) — dừng lại để tránh chạy nhầm tài khoản"
+    )
     return False
 
 
@@ -734,7 +1044,13 @@ def launch_app() -> int:
     return int(pid) if pid.strip().isdigit() else 0
 
 
-def build_js(plan: str = "auto", list_only: bool = False, stack: bool = False, old_token: str = "", stack_mode=None) -> str:
+def build_js(
+    plan: str = "auto",
+    list_only: bool = False,
+    stack: bool = False,
+    old_token: str = "",
+    stack_mode=None,
+) -> str:
     """Chọn sản phẩm cần tra theo plan: 5x=20TB, 20x=30TB (ID kèm dùng thử bị ẩn)."""
     js = FRIDA_JS
     if list_only:
@@ -742,53 +1058,97 @@ def build_js(plan: str = "auto", list_only: bool = False, stack: bool = False, o
     if stack:
         js = js.replace('var PREFER="";', 'var PREFER=""; var STACK=true;', 1)
     if old_token:
-        js = js.replace('var PREFER="";', 'var PREFER=""; var OLD_TOKEN="%s";' % old_token, 1)
+        js = js.replace(
+            'var PREFER="";', 'var PREFER=""; var OLD_TOKEN="%s";' % old_token, 1
+        )
     if stack_mode is not None:
-        js = js.replace('var PREFER="";', 'var PREFER=""; var STACK_MODE=%d;' % stack_mode, 1)
+        js = js.replace(
+            'var PREFER="";', 'var PREFER=""; var STACK_MODE=%d;' % stack_mode, 1
+        )
     if plan == "20x":
-        js = js.replace('var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];',
-                        'var PRODUCTS=["g1.play.ai.pro","g1.ai.pro","g1.30tb"];')
+        js = js.replace(
+            'var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];',
+            'var PRODUCTS=["g1.play.ai.pro","g1.ai.pro","g1.30tb"];',
+        )
     elif plan == "5x":
-        js = js.replace('var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];',
-                        'var PRODUCTS=["g1.play.20tb"];')
-    elif plan == "pro3":
-        # Google AI Pro 2TB/5TB (g1.2tb.ai.3months_eft): eft-3months
-        js = js.replace('var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];',
-                        'var PRODUCTS=["g1.2tb.ai.3months_eft"];')
-        js = js.replace('var PREFER="";', 'var PREFER="eft-3months";', 1)
+        js = js.replace(
+            'var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];',
+            'var PRODUCTS=["g1.play.20tb"];',
+        )
+    elif plan in ("pro2", "pro3"):
+        # Google AI Pro 2TB/5TB (g1.2tb.ai.2months_eft): eft-2months
+        js = js.replace(
+            'var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];',
+            'var PRODUCTS=["g1.2tb.ai.2months_eft"];',
+        )
+        js = js.replace('var PREFER="";', 'var PREFER="eft-2months";', 1)
     elif plan.startswith("pro"):
         # Google AI Pro 5TB (g1.2tb.ai.subs_variant）：12months-eft / 6months-eft / 6months-eft-2 / 6months-eft-ss-2026
-        prefer = {"pro12": "12months-eft", "pro6": "6months-eft",
-                  "pro6b": "6months-eft-2", "pro6c": "6months-eft-ss-2026"}.get(plan, "12months-eft")
-        prods = '["g1.2tb.ai.subs_variant","g1.2tb.ai.3months_eft"]' if list_only else '["g1.2tb.ai.subs_variant"]'
-        js = js.replace('var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];',
-                        f'var PRODUCTS={prods};')
+        prefer = {
+            "pro12": "12months-eft",
+            "pro6": "6months-eft",
+            "pro6b": "6months-eft-2",
+            "pro6c": "6months-eft-ss-2026",
+        }.get(plan, "12months-eft")
+        prods = (
+            '["g1.2tb.ai.subs_variant","g1.2tb.ai.2months_eft"]'
+            if list_only
+            else '["g1.2tb.ai.subs_variant"]'
+        )
+        js = js.replace(
+            'var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];',
+            f"var PRODUCTS={prods};",
+        )
         js = js.replace('var PREFER="";', 'var PREFER="%s";' % prefer, 1)
     return js
 
 
-def run_trial(pid: int, wait=25, plan="auto", list_only=False, stack=False, old_token="", stack_mode=None, password="", account_email="") -> dict:
+def run_trial(
+    pid: int,
+    wait=25,
+    plan="auto",
+    list_only=False,
+    stack=False,
+    old_token="",
+    stack_mode=None,
+    password="",
+    account_email="",
+    auto_subscribe: bool = False,
+) -> dict:
     import frida
+
     step("Đang inject module thanh toán, tra dùng thử miễn phí")
     dev = frida.get_usb_device(timeout=10)
     sess = dev.attach(pid)
-    res = {"offers": [], "launched": None, "purchase": None, "old_purchase": None, "sub_canceled": False, "errors": [], "list_done": False}
+    res = {
+        "offers": [],
+        "launched": None,
+        "purchase": None,
+        "old_purchase": None,
+        "sub_canceled": False,
+        "errors": [],
+        "list_done": False,
+    }
 
     def on_msg(m, _):
         p = m.get("payload") or {}
         ev = p.get("ev")
         if ev == "offer":
             res["offers"].append(p)
-            note(f"offer {p.get('id')} → {p.get('micros')} ({p.get('p0','')})")
-            note(f"    token={p.get('token','')}")
+            note(f"offer {p.get('id')} → {p.get('micros')} ({p.get('p0', '')})")
+            note(f"    token={p.get('token', '')}")
         elif ev == "list_only":
             res["list_done"] = True
         elif ev == "old_purchase":
             res["old_purchase"] = p
-            note(f"Gói đang có trên Play Billing: token={p.get('head')}… | autoRenewing={p.get('autoRenewing')} | products={p.get('products')}")
+            note(
+                f"Gói đang có trên Play Billing: token={p.get('head')}… | autoRenewing={p.get('autoRenewing')} | products={p.get('products')}"
+            )
         elif ev == "sub_canceled":
             res["sub_canceled"] = True
-            warn(f"Play Billing báo gói hiện tại đã bị HỦY GIA HẠN (autoRenewing=false, token={p.get('head')}…) — Nguyên nhân 1 gây lỗi ITEM_UNAVAILABLE!")
+            warn(
+                f"Play Billing báo gói hiện tại đã bị HỦY GIA HẠN (autoRenewing=false, token={p.get('head')}…) — Nguyên nhân 1 gây lỗi ITEM_UNAVAILABLE!"
+            )
         elif ev == "launched":
             res["launched"] = p
             ok(f"Đã mở trang thanh toán:{p}")
@@ -808,11 +1168,30 @@ def run_trial(pid: int, wait=25, plan="auto", list_only=False, stack=False, old_
                 break
             if not list_only and res["launched"] is not None:
                 break
-            if any(e.get("ev") in ("no_trial", "boot_err", "query_err", "launch_err", "launch_outer_err", "no_activity", "boot_fail") for e in res["errors"]):
+            if any(
+                e.get("ev")
+                in (
+                    "no_trial",
+                    "boot_err",
+                    "query_err",
+                    "launch_err",
+                    "launch_outer_err",
+                    "no_activity",
+                    "boot_fail",
+                )
+                for e in res["errors"]
+            ):
                 break
             time.sleep(0.3)
         if not list_only and res["launched"] and res["launched"].get("code") == 0:
-            res["sheet"] = confirm_zero(password=password, frida_res=res, account_email=account_email, old_token=old_token)
+            res["sheet"] = confirm_zero(
+                password=password,
+                frida_res=res,
+                account_email=account_email,
+                old_token=old_token,
+                auto_subscribe=auto_subscribe,
+                allow_1month=False,
+            )
     finally:
         try:
             sess.detach()
@@ -826,22 +1205,62 @@ def handle_verify(password="") -> bool:
     changed = False
     for _ in range(12):
         blob = " ".join(n["text"] for n in nodes(ui_xml()) if n["text"])
-        if "Để sau" in blob or "以后再说" in blob or "Điểm Play" in blob or "Play 积分" in blob or "Not now" in blob or "No thanks" in blob:
-            tap_text("Để sau", "以后再说", "Not now", "No thanks"); time.sleep(2); changed = True; continue
+        if (
+            "Để sau" in blob
+            or "以后再说" in blob
+            or "Điểm Play" in blob
+            or "Play 积分" in blob
+            or "Not now" in blob
+            or "No thanks" in blob
+        ):
+            tap_text("Để sau", "以后再说", "Not now", "No thanks")
+            time.sleep(2)
+            changed = True
+            continue
         if ("Xác minh" in blob or "验证" in blob or "Verify" in blob) and password:
             es = [n for n in nodes(ui_xml()) if "EditText" in n["cls"]]
             if es:
-                tap(es[0]["x"], es[0]["y"]); time.sleep(0.8)
-                type_text(password); time.sleep(0.8)
-                tap_text("Xác minh", "验证", "Verify"); time.sleep(6); changed = True; continue
+                tap(es[0]["x"], es[0]["y"])
+                time.sleep(0.8)
+                type_text(password)
+                time.sleep(0.8)
+                tap_text("Xác minh", "验证", "Verify")
+                time.sleep(6)
+                changed = True
+                continue
         break
     return changed
 
 
+INELIGIBLE_KEYWORDS = (
+    "not eligible",
+    "subscribe without it",
+    "without a free trial",
+    "without the free trial",
+    "without free trial",
+    "no free trial",
+    "free trial unavailable",
+    "trial unavailable",
+    "trial already used",
+    "không đủ điều kiện",
+    "đăng ký mà không cần",
+    "đăng ký mà không có",
+    "không có gói dùng thử",
+    "không có bản dùng thử",
+    "không kèm dùng thử",
+    "không áp dụng dùng thử",
+    "đã sử dụng gói dùng thử",
+    "đã sử dụng dùng thử",
+    "不符合免费试用",
+    "不符合试用条件",
+    "不符合条件",
+    "无法享受免费试用",
+    "不试用的情况下订阅",
+    "无免费试用",
+    "已使用免费试用",
+)
 ERROR_KEYWORDS = (
     "not available for purchase",
-    "không đủ điều kiện dùng thử miễn phí",
-    "not eligible",
     "already subscribed",
     "bạn đã đăng ký",
     "something went wrong",
@@ -851,9 +1270,143 @@ ERROR_KEYWORDS = (
     "transaction declined",
     "giao dịch bị từ chối",
     "không có sẵn để mua",
+) + INELIGIBLE_KEYWORDS
+DISMISS_BTNS = (
+    "Got it",
+    "Đã hiểu",
+    "OK",
+    "Đóng",
+    "Close",
+    "知道了",
+    "Hủy",
+    "Cancel",
+    "取消",
+    "关闭",
 )
-DISMISS_BTNS = ("Got it", "Đã hiểu", "OK", "Đóng", "Close", "知道了", "Hủy", "Cancel", "取消", "关闭")
 SUBSCRIBE_BTNS = ("Subscribe", "Đăng ký", "订阅", "1-tap buy", "Mua với 1 nhấn")
+
+_CURR_PRE = r"(?:US\$|HK\$|NT\$|CA\$|AU\$|S\$|JP¥|CN¥|RM|₫|\$|€|£|¥|₩|₹|₱|฿)"
+_CURR_POST = r"(?:₫|đồng|đ|vnd|usd|jpy|eur|gbp|hkd|twd|sgd|krw|thb|php|inr)"
+_PRICE_RE = re.compile(
+    rf"(?:{_CURR_PRE}\s*([\d][\d.,]*)|([\d][\d.,]*)\s*{_CURR_POST}(?![a-zA-ZÀ-ỹ]))",
+    re.IGNORECASE,
+)
+_TODAY_ANCHOR_RE = re.compile(
+    r"(?:starting\s+today|due\s+today|bắt\s+đầu\s+từ\s+hôm\s+nay|sắp\s+bị\s+trừ\s+hôm\s+nay|thanh\s+toán\s+hôm\s+nay|hôm\s+nay|today|今天开始|今天到期|今天应付|今日应付|今天)",
+    re.IGNORECASE,
+)
+_FUTURE_STOP_RE = re.compile(
+    r"(?:starting\s+(?!today\b)|bắt\s+đầu\s+từ\s+(?!hôm\s+nay\b)|ngày\s+bắt\s+đầu|after\s+trial|sau\s+khi\s+dùng\s+thử|\bthen\b|cancel\s+anytime|hủy\s+bất\s+kỳ|you\s+won['’]t\s+be\s+charged|bạn\s+sẽ\s+không\s+bị\s+tính\s+phí|we['’]ll\s+send|chúng\s+tôi\s+sẽ|20\d{2}\s*年)",
+    re.IGNORECASE,
+)
+_ONE_MONTH_TRIAL_RE = re.compile(
+    r"(?:"
+    r"\b1[\s\-]*month\s+free\s+trial\b"
+    r"|free\s+trial\s*(?:for\s*)?1[\s\-]*month\b"
+    r"|dùng\s+thử\s+(?:miễn\s+phí\s+)?1\s+tháng"
+    r"|1\s+tháng\s+dùng\s+thử\s+miễn\s+phí"
+    r"|1\s*个?月\s*免费试用"
+    r"|免费试用\s*1\s*个?月"
+    r")",
+    re.IGNORECASE,
+)
+_EXPLICIT_TRIAL_RE = re.compile(
+    r"(?:free\s+trial|dùng\s+thử\s+miễn\s+phí|miễn\s+phí\s+dùng\s+thử|免费试用)",
+    re.IGNORECASE,
+)
+_FREE_TODAY_WORD_RE = re.compile(
+    r"(?:\bfree\b|miễn\s+phí|免费)",
+    re.IGNORECASE,
+)
+_TAX_OR_BALANCE_RE = re.compile(
+    r"(?:tax|thuế|balance|số\s+dư|余额|税)\s*[:：]?\s*$",
+    re.IGNORECASE,
+)
+_DEFERRED_CHARGE_RE = re.compile(
+    r"(?:you\s+won['’]t\s+be\s+charged\s+if\s+you\s+cancel|bạn\s+sẽ\s+không\s+bị\s+tính\s+phí\s+nếu\s+hủy|不会向您收费)",
+    re.IGNORECASE,
+)
+_STACK_CONVERT_RE = re.compile(
+    r"(?:converted\s+from\s+your\s+remaining|quy\s+đổi\s+từ\s+thời\s+gian\s+còn\s+lại|剩余时间折算)",
+    re.IGNORECASE,
+)
+
+
+def _is_zero_amount(num_str: str) -> bool:
+    digits = re.sub(r"\D", "", num_str or "")
+    return bool(digits) and all(ch == "0" for ch in digits)
+
+
+def _extract_today_segments(text: str) -> list[str]:
+    segs = []
+    for tm in _TODAY_ANCHOR_RE.finditer(text):
+        after = text[tm.end() : tm.end() + 160]
+        stop = _FUTURE_STOP_RE.search(after)
+        if stop:
+            after = after[: stop.start()]
+        segs.append(after)
+    return segs
+
+
+def _detect_paid_today(text: str) -> str:
+    """Trả về chuỗi giá tiền nếu trang thanh toán thu phí > 0 ngay hôm nay, ngược lại trả về chuỗi rỗng."""
+    for seg in _extract_today_segments(text):
+        trial_m = _EXPLICIT_TRIAL_RE.search(seg)
+        trial_pos = trial_m.start() if trial_m else len(seg)
+        zero_seen_before = False
+        for pm in _PRICE_RE.finditer(seg):
+            if pm.start() > trial_pos:
+                break
+            num = pm.group(1) or pm.group(2) or ""
+            if _is_zero_amount(num):
+                prefix = seg[: pm.start()]
+                if not _TAX_OR_BALANCE_RE.search(prefix):
+                    zero_seen_before = True
+                continue
+            if not zero_seen_before:
+                return pm.group(0).strip()
+    return ""
+
+
+def _verify_trial_sheet(text: str, allow_1month: bool = False) -> tuple[bool, str]:
+    """Xác minh nghiêm ngặt (fail-closed) xem bảng thanh toán có ĐÚNG là gói dùng thử 0đ hợp lệ hay không."""
+    low = (text or "").lower()
+    for kw in INELIGIBLE_KEYWORDS:
+        if kw in low:
+            return False, f"ineligible:{kw}"
+    if not allow_1month and _ONE_MONTH_TRIAL_RE.search(text):
+        return False, "1_month_trial_only"
+    paid_today = _detect_paid_today(text)
+    if paid_today:
+        return False, f"paid_today:{paid_today}"
+
+    today_is_zero = False
+    today_is_free = False
+    for seg in _extract_today_segments(text):
+        head = seg[:40]
+        for pm in _PRICE_RE.finditer(head):
+            num = pm.group(1) or pm.group(2) or ""
+            prefix = head[: pm.start()]
+            if _is_zero_amount(num) and not _TAX_OR_BALANCE_RE.search(prefix):
+                today_is_zero = True
+                break
+        if _FREE_TODAY_WORD_RE.search(head):
+            today_is_free = True
+
+    if _EXPLICIT_TRIAL_RE.search(text):
+        return True, "explicit_free_trial"
+    if today_is_zero:
+        return True, "zero_due_today"
+    if today_is_free:
+        return True, "free_today"
+    if _STACK_CONVERT_RE.search(text) and _DEFERRED_CHARGE_RE.search(text):
+        return True, "stacked_deferred_trial"
+
+    for pm in _PRICE_RE.finditer(text):
+        num = pm.group(1) or pm.group(2) or ""
+        if not _is_zero_amount(num):
+            return False, f"non_zero_price:{pm.group(0).strip()}"
+    return False, "not_verified_trial"
 
 
 def _tap_button(ns: list, labels: tuple) -> bool:
@@ -865,12 +1418,37 @@ def _tap_button(ns: list, labels: tuple) -> bool:
     return False
 
 
-def confirm_zero(wait=45, password="", frida_res=None, account_email="", old_token="") -> dict:
-    step("Chờ Module thanh toán hiện lên để ấn Subscribe & kiểm tra kết quả")
-    out = {"price": None, "confirmed": False, "ineligible": False, "success": False, "error": "", "text": ""}
+def confirm_zero(
+    wait=45,
+    password="",
+    frida_res=None,
+    account_email="",
+    old_token="",
+    auto_subscribe: bool = False,
+    allow_1month: bool = False,
+) -> dict:
+    if not auto_subscribe:
+        wait = max(wait, 90)
+        step(
+            "Chờ Module thanh toán hiện lên (chế độ thủ công — chưa bật --auto-subcribe, sẽ KHÔNG tự bấm Subscribe)"
+        )
+    else:
+        step("Chờ Module thanh toán hiện lên để xác minh Trial 0đ & tự bấm Subscribe")
+    out = {
+        "price": None,
+        "confirmed": False,
+        "ineligible": False,
+        "success": False,
+        "error": "",
+        "text": "",
+        "trial_verified": False,
+        "trial_reason": "",
+    }
     end_t = time.time() + wait
     tapped_at = 0.0
-    last_tap = 0.0
+    saw_sheet = False
+    manual_notified = False
+    unverified_polls = 0
     time.sleep(1.5)
     while time.time() < end_t:
         if frida_res and frida_res.get("purchase"):
@@ -881,7 +1459,7 @@ def confirm_zero(wait=45, password="", frida_res=None, account_email="", old_tok
                 out["success"] = True
                 ok("Đăng ký thành công (Play Billing callback code=0 — Successful)!")
                 return out
-            elif out["confirmed"] and code is not None:
+            elif code is not None:
                 out["error"] = f"Play Billing code={code}: {cb.get('msg', '')}"
                 warn(f"Giao dịch thất bại ({out['error']}), dừng bước hiện tại")
                 return out
@@ -899,69 +1477,122 @@ def confirm_zero(wait=45, password="", frida_res=None, account_email="", old_tok
 
         # 1. Phát hiện hộp thoại Error / không đủ điều kiện (trước hoặc sau khi ấn Subscribe)
         has_err_title = any(t in ("Error", "Lỗi", "错误") for t in texts)
-        has_err_kw = any(k in low for k in ERROR_KEYWORDS) or ("不符合免费试用条件" in text)
+        has_err_kw = any(k in low for k in ERROR_KEYWORDS)
         if has_err_title or has_err_kw:
             err_msg = text[:200]
-            warn(f"Xuất hiện hộp thoại Error: {err_msg}")
-            if _tap_button(ns, DISMISS_BTNS):
+            warn(f"Xuất hiện hộp thoại Error / không đủ điều kiện Trial: {err_msg}")
+            if auto_subscribe and _tap_button(ns, DISMISS_BTNS):
                 time.sleep(1)
             out["ineligible"] = True
             out["error"] = err_msg
             out["success"] = False
             return out
 
-        # 2. Nếu đã ấn Subscribe, kiểm tra thông báo thành công hoặc xác minh mật khẩu
-        if out["confirmed"]:
-            if any(k in low for k in ("subscribed", "đã đăng ký", "payment successful", "thanh toán thành công", "manage subscription", "quản lý gói đăng ký", "play points", "điểm play")) or ("已订阅" in text):
-                _tap_button(ns, ("No thanks", "Not now", "Để sau", "以后再说", "Got it", "OK", "Đã hiểu"))
+        # 2. Nếu đã bấm Subscribe (hoặc người dùng đang thao tác thủ công sau khi thấy sheet), kiểm tra kết quả
+        if out["confirmed"] or (not auto_subscribe and saw_sheet):
+            if any(
+                k in low
+                for k in (
+                    "subscribed",
+                    "đã đăng ký",
+                    "payment successful",
+                    "thanh toán thành công",
+                    "manage subscription",
+                    "quản lý gói đăng ký",
+                    "play points",
+                    "điểm play",
+                )
+            ) or ("已订阅" in text):
+                if auto_subscribe:
+                    _tap_button(
+                        ns,
+                        (
+                            "No thanks",
+                            "Not now",
+                            "Để sau",
+                            "以后再说",
+                            "Got it",
+                            "OK",
+                            "Đã hiểu",
+                        ),
+                    )
                 out["success"] = True
                 ok("Đã đăng ký thành công (Successful)!")
                 return out
-            if ("xác minh" in low or "verify" in low or "验证" in text) and password:
+            if (
+                auto_subscribe
+                and ("xác minh" in low or "verify" in low or "验证" in text)
+                and password
+            ):
                 handle_verify(password)
                 continue
-            # Nếu bảng Play Billing đã tự đóng sau khi ấn Subscribe (>4s) và không có lỗi
-            if "com.android.vending" not in xml and (time.time() - tapped_at) > 4.0:
+            # Nếu bảng Play Billing đã đóng sau khi ấn Subscribe (hoặc người dùng tự thao tác xong)
+            closed_wait = 4.0 if out["confirmed"] else 2.0
+            ref_t = tapped_at if tapped_at else (time.time() - 3.0)
+            if "com.android.vending" not in xml and (time.time() - ref_t) > closed_wait:
                 tok = read_purchase_token("g1.2tb.ai.", account_email)
                 if tok and tok != old_token:
                     out["success"] = True
                     ok("Đã xác nhận gói đăng ký mới trong Play (Successful)!")
                     return out
+                if not auto_subscribe:
+                    warn("Bảng thanh toán đã đóng và chưa ghi nhận gói đăng ký mới")
+                    out["error"] = "sheet_closed"
+                    return out
 
         # 3. Tìm đúng nút Subscribe trên Module thanh toán (tránh nhầm dòng điều khoản dịch vụ)
         sub_btn = next(
-            (n for n in ns if n["text"].strip() in SUBSCRIBE_BTNS and ("Button" in n["cls"] or n["y"] > 2250)),
+            (
+                n
+                for n in ns
+                if n["text"].strip() in SUBSCRIBE_BTNS
+                and ("Button" in n["cls"] or n["y"] > 2250)
+            ),
             None,
         )
         if sub_btn:
-            if "1-month free trial" in low or "dùng thử miễn phí 1 tháng" in low:
-                warn("Trang thanh toán chỉ hiện dùng thử 1 tháng, hủy để tránh trừ tiền")
-                out["error"] = "1_month_trial_only"
-                return out
-            is_free_trial = (
-                "free trial" in low
-                or "dùng thử miễn phí" in low
-                or "免费试用" in text
-                or bool(re.search(r"(?:US\$|HK\$|NT\$|JP¥|¥|₫|\$|€|£)\s*0(?:[.,]00)?\b", text))
-                or bool(re.search(r"\b0\s*(?:₫|đ|đồng)\b", low))
-                or bool(re.search(r"\b\d+\s*(?:days|ngày|天)\b", low))
+            saw_sheet = True
+            is_valid_trial, reason = _verify_trial_sheet(
+                text, allow_1month=allow_1month
             )
-            if not is_free_trial:
-                m = re.search(r"(US\$|HK\$|NT\$|JP¥|¥|₫|\$|€|£)\s?([\d.,]+)", text)
-                if m and "starting today" not in low:
-                    warn(f"Số tiền hiện tại là {m.group(0)} và không thấy dòng dùng thử 0 đồng, không bấm Subscribe")
-                    out["price"] = m.group(0)
-                    out["error"] = f"non_zero_price:{m.group(0)}"
-                    return out
-            if (time.time() - last_tap) < 5.0:
+            if not is_valid_trial:
+                if reason == "not_verified_trial" and unverified_polls < 2:
+                    unverified_polls += 1
+                    time.sleep(1.5)
+                    continue
+                if reason.startswith(("paid_today:", "non_zero_price:")):
+                    out["price"] = reason.split(":", 1)[1]
+                warn(
+                    f"KHÔNG phải gói dùng thử 0đ hợp lệ ({reason}) — tuyệt đối KHÔNG bấm Subscribe!"
+                )
+                out["error"] = reason
+                out["ineligible"] = reason.startswith("ineligible:")
+                return out
+
+            unverified_polls = 0
+            out["trial_verified"] = True
+            out["trial_reason"] = reason
+
+            if not auto_subscribe:
+                if not manual_notified:
+                    note(
+                        f"Đã xác minh gói dùng thử 0đ ({reason}), nhưng đang tắt --auto-subcribe → Mời bạn tự kiểm tra và bấm '{sub_btn['text'].strip()}' trên giả lập"
+                    )
+                    manual_notified = True
                 time.sleep(1.5)
                 continue
-            note(f"Module thanh toán đã hiện → Ấn '{sub_btn['text'].strip()}' tại ({sub_btn['x']}, {sub_btn['y']})")
+
+            # Chỉ cho phép tự bấm Subscribe tối đa 1 lần trong một phiên (tránh bấm lại lần 2 nếu Play reload sheet sang trả phí)
+            if out["confirmed"]:
+                time.sleep(1.5)
+                continue
+
+            note(
+                f"Đã xác minh Trial 0đ ({reason}) → Ấn '{sub_btn['text'].strip()}' tại ({sub_btn['x']}, {sub_btn['y']})"
+            )
             tap(sub_btn["x"], sub_btn["y"])
             out["confirmed"] = True
-            last_tap = time.time()
-            if not tapped_at:
-                tapped_at = last_tap
+            tapped_at = time.time()
             time.sleep(3.0)
             continue
 
@@ -973,8 +1604,11 @@ def confirm_zero(wait=45, password="", frida_res=None, account_email="", old_tok
 
 def verify() -> str:
     step("Đối chiếu trạng thái đăng ký")
-    sh("shell", f"am start -a android.intent.action.VIEW "
-                f"-d 'https://play.google.com/store/account/subscriptions'")
+    sh(
+        "shell",
+        f"am start -a android.intent.action.VIEW "
+        f"-d 'https://play.google.com/store/account/subscriptions'",
+    )
     time.sleep(9)
     text = " | ".join(n["text"] for n in nodes(ui_xml()) if n["text"])
     if "Ultra" in text or "AI Pro" in text or "Google One" in text:
@@ -983,12 +1617,33 @@ def verify() -> str:
 
 
 # ---------- Quy trình 1 tài khoản ----------
-def process(email, password="", totp_secret="", add=True, card=None, plan="auto", no_switch=False, list_only=False, stack=False, old_token="", stack_mode=None) -> dict:
+def process(
+    email,
+    password="",
+    totp_secret="",
+    add=True,
+    card=None,
+    plan="auto",
+    no_switch=False,
+    list_only=False,
+    stack=False,
+    old_token="",
+    stack_mode=None,
+    auto_subscribe: bool = False,
+) -> dict:
     real_email = resolve_active_account(email)
     print("\n" + "=" * 56)
-    print(f"  Đang xử lý tài khoản:{real_email} (plan={plan}, stack={stack})")
+    print(
+        f"  Đang xử lý tài khoản:{real_email} (plan={plan}, stack={stack}, auto_subscribe={auto_subscribe})"
+    )
     print("=" * 56)
-    rec = {"email": real_email, "requested_email": email, "plan": plan, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "status": "unknown"}
+    rec = {
+        "email": real_email,
+        "requested_email": email,
+        "plan": plan,
+        "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "status": "unknown",
+    }
     if add:
         try:
             if not add_account(real_email, password, totp_secret):
@@ -1004,18 +1659,22 @@ def process(email, password="", totp_secret="", add=True, card=None, plan="auto"
         except Exception as e:
             warn(f"Gắn thẻ thất bại:{e}")
 
-    # Nguyên nhân 3 & 4: Đồng bộ ngữ cảnh tài khoản giữa Play Store & Google One, dọn cache sku_details.db
-    sync_account_context(real_email)
+    # Nguyên nhân 3 & 4: Đồng bộ ngữ cảnh tài khoản giữa Play Store & Google One (chỉ restart Play khi thực sự cần)
+    need_vending_restart = sync_account_context(real_email)
 
     if globals().get("SKIP_ACCOUNT_CHECK"):
         ok(f"Đã xác định & đồng bộ tài khoản đang dùng trên thiết bị: {real_email}")
     elif list_only:
         cur = current_play_account() or real_email
-        ok(f"Chế độ liệt kê: dùng tài khoản hiện tại trên thiết bị {cur or 'không rõ'} (không kiểm tra, không đặt mua)")
+        ok(
+            f"Chế độ liệt kê: dùng tài khoản hiện tại trên thiết bị {cur or 'không rõ'} (không kiểm tra, không đặt mua)"
+        )
     elif no_switch:
         cur = current_play_account()
         if cur != real_email.lower():
-            warn(f"Tài khoản Play hiện tại là {cur or 'không rõ'}, không phải {real_email}, dừng lại")
+            warn(
+                f"Tài khoản Play hiện tại là {cur or 'không rõ'}, không phải {real_email}, dừng lại"
+            )
             rec["status"] = "wrong_account"
             return rec
         ok("Đã xác nhận tài khoản Play (chế độ chuyển tay)")
@@ -1027,34 +1686,59 @@ def process(email, password="", totp_secret="", add=True, card=None, plan="auto"
     if not list_only:
         pinfo = read_purchase_info("g1.2tb.ai.", real_email)
         if pinfo["alive"] and not pinfo["auto_renewing"]:
-            warn("Nguyên nhân 1: Gói hiện tại đang ở trạng thái ĐÃ HỦY (Canceled / autoRenewing=false). Đang thử tự động Resubscribe...")
-            if ensure_subscription_resubscribed():
+            warn(
+                "Nguyên nhân 1: Gói hiện tại đang ở trạng thái ĐÃ HỦY (Canceled / autoRenewing=false)."
+            )
+            if ensure_subscription_resubscribed(auto_subscribe=auto_subscribe):
                 pinfo = read_purchase_info("g1.2tb.ai.", real_email)
         if pinfo["alive"]:
             if not old_token:
                 old_token = pinfo["token"]
             if not stack:
-                note("Nguyên nhân 1: Tài khoản đã có gói đang hoạt động → Tự động bật chế độ nâng cấp cộng dồn (--stack) để tránh lỗi mua trùng SKU")
+                note(
+                    "Nguyên nhân 1: Tài khoản đã có gói đang hoạt động → Tự động bật chế độ nâng cấp cộng dồn (--stack) để tránh lỗi mua trùng SKU"
+                )
                 stack = True
-            ok(f"Dùng purchaseToken của {real_email} ({old_token[:16]}…) để cộng dồn gói đăng ký")
+            ok(
+                f"Dùng purchaseToken của {real_email} ({old_token[:16]}…) để cộng dồn gói đăng ký"
+            )
         else:
             if stack:
-                note(f"Tài khoản {real_email} chưa có gói đang hoạt động → Sẽ đăng ký gói mới (không gửi oldPurchaseToken rỗng/cũ)")
+                note(
+                    f"Tài khoản {real_email} chưa có gói đang hoạt động → Sẽ đăng ký gói mới (không gửi oldPurchaseToken rỗng/cũ)"
+                )
             old_token = ""
 
     if not list_only:
-        ensure_vending(restart=True, auth_account=real_email)
+        ensure_vending(restart=need_vending_restart, auth_account=real_email)
     pid = launch_app()
     if not pid:
         rec["status"] = "app_not_started"
         return rec
-    fr = run_trial(pid, plan=plan, list_only=list_only, stack=stack, old_token=old_token, stack_mode=stack_mode, password=password, account_email=real_email)
+    fr = run_trial(
+        pid,
+        plan=plan,
+        list_only=list_only,
+        stack=stack,
+        old_token=old_token,
+        stack_mode=stack_mode,
+        password=password,
+        account_email=real_email,
+        auto_subscribe=auto_subscribe,
+    )
     rec.update(fr)
     if list_only:
         rec["status"] = "listed"
         return rec
     if fr["launched"] and fr["launched"].get("code") == 0:
-        sheet = fr.get("sheet") or confirm_zero(password=password, frida_res=fr, account_email=real_email, old_token=old_token)
+        sheet = fr.get("sheet") or confirm_zero(
+            password=password,
+            frida_res=fr,
+            account_email=real_email,
+            old_token=old_token,
+            auto_subscribe=auto_subscribe,
+            allow_1month=False,
+        )
         rec["sheet"] = sheet
         if sheet.get("success"):
             rec["status"] = "subscribed"
@@ -1086,6 +1770,7 @@ def do_check():
     ensure_vending()
     try:
         import frida
+
         ok(f"frida：{frida.__version__}")
     except Exception:
         warn("Máy tính chưa cài frida, hãy chạy: pip3 install frida")
@@ -1122,24 +1807,67 @@ def parse_card(parts) -> dict | None:
 
 def main():
     global ADB, SERIAL
-    ap = argparse.ArgumentParser(description="Script một chạm mở Google AI Ultra 0 đồng")
-    ap.add_argument("accounts", nargs="?", help="File tài khoản (mỗi dòng email----password----recovery----totp)")
+    ap = argparse.ArgumentParser(
+        description="Script một chạm mở Google AI Ultra 0 đồng"
+    )
+    ap.add_argument(
+        "accounts",
+        nargs="?",
+        help="File tài khoản (mỗi dòng email----password----recovery----totp)",
+    )
     ap.add_argument("--account", help="1 tài khoản: email:password:totp")
     ap.add_argument("--check", action="store_true", help="Chỉ tự kiểm tra môi trường")
-    ap.add_argument("--list", action="store_true", help="Chỉ liệt kê offer và token, không mở trang thanh toán (không rủi ro)")
-    ap.add_argument("--force", action="store_true", help="Bỏ qua kiểm tra tài khoản Play (dùng khi không đọc được tài khoản)")
-    ap.add_argument("--mode", type=int, default=None,
-                    help="Chế độ thay thế: 1=TIME_PRORATION 2=CHARGE_PRORATED_PRICE 3=WITHOUT_PRORATION 4=DEFERRED 5=CHARGE_FULL_PRICE")
-    ap.add_argument("--old-token", default="",
-                    help="purchaseToken của gói đăng ký hiện tại (dùng kèm --stack, lấy nó để nâng cấp luôn, bỏ qua queryPurchases)")
-    ap.add_argument("--stack", action="store_true",
-                    help="Cộng dồn bằng nâng cấp gói đăng ký: dùng purchaseToken cũ + CHARGE_FULL_PRICE để mở thanh toán, thời gian dùng thử còn lại sẽ được quy đổi và dời lại")
+    ap.add_argument(
+        "--list",
+        action="store_true",
+        help="Chỉ liệt kê offer và token, không mở trang thanh toán (không rủi ro)",
+    )
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="Bỏ qua kiểm tra tài khoản Play (dùng khi không đọc được tài khoản)",
+    )
+    ap.add_argument(
+        "--mode",
+        type=int,
+        default=None,
+        help="Chế độ thay thế: 1=TIME_PRORATION 2=CHARGE_PRORATED_PRICE 3=WITHOUT_PRORATION 4=DEFERRED 5=CHARGE_FULL_PRICE",
+    )
+    ap.add_argument(
+        "--old-token",
+        default="",
+        help="purchaseToken của gói đăng ký hiện tại (dùng kèm --stack, lấy nó để nâng cấp luôn, bỏ qua queryPurchases)",
+    )
+    ap.add_argument(
+        "--stack",
+        action="store_true",
+        help="Cộng dồn bằng nâng cấp gói đăng ký: dùng purchaseToken cũ + CHARGE_FULL_PRICE để mở thanh toán, thời gian dùng thử còn lại sẽ được quy đổi và dời lại",
+    )
     ap.add_argument("--serial", default=None)
-    ap.add_argument("--no-add", action="store_true", help="Bỏ qua tự thêm tài khoản (tài khoản đã có trên điện thoại)")
-    ap.add_argument("--no-switch", action="store_true",
-                    help="Không tự chuyển tài khoản, chỉ kiểm tra tài khoản Play hiện tại có phải tài khoản cần dùng không")
-    ap.add_argument("--plan", default="auto", choices=["auto", "5x", "20x", "pro12", "pro6", "pro6b", "pro6c", "pro3"],
-                    help="auto=tra cả hai gói rồi chọn gói dài nhất; 5x=Ultra 20TB; 20x=Ultra 30TB; pro3=g1.2tb.ai.3months_eft (eft-3months)")
+    ap.add_argument(
+        "--no-add",
+        action="store_true",
+        help="Bỏ qua tự thêm tài khoản (tài khoản đã có trên điện thoại)",
+    )
+    ap.add_argument(
+        "--no-switch",
+        action="store_true",
+        help="Không tự chuyển tài khoản, chỉ kiểm tra tài khoản Play hiện tại có phải tài khoản cần dùng không",
+    )
+    ap.add_argument(
+        "--plan",
+        default="auto",
+        choices=["auto", "5x", "20x", "pro12", "pro6", "pro6b", "pro6c", "pro2", "pro3"],
+        help="auto=tra cả hai gói rồi chọn gói dài nhất; 5x=Ultra 20TB; 20x=Ultra 30TB; pro2/pro3=g1.2tb.ai.2months_eft (eft-2months)",
+    )
+    ap.add_argument(
+        "--auto-subcribe",
+        "--auto-subscribe",
+        dest="auto_subscribe",
+        action="store_true",
+        default=False,
+        help="Tự động bấm Subscribe/Resubscribe khi xác minh đúng gói dùng thử 0đ (mặc định: tắt)",
+    )
     a = ap.parse_args()
 
     ADB = find_adb()
@@ -1154,7 +1882,7 @@ def main():
     ensure_network()
     ensure_frida_server()
     ensure_module_apk()
-    ensure_vending()   # Cửa hàng Play phải đang chạy, nếu không truy vấn thanh toán sẽ không bao giờ gọi lại
+    ensure_vending()  # Cửa hàng Play phải đang chạy, nếu không truy vấn thanh toán sẽ không bao giờ gọi lại
 
     REPORT_DIR.mkdir(exist_ok=True)
     rows = []
@@ -1162,7 +1890,14 @@ def main():
         a.account = "current@device"
     if a.account:
         parts = a.account.split(":")
-        rows = [[parts[0], parts[1] if len(parts) > 1 else "", "", parts[2] if len(parts) > 2 else ""]]
+        rows = [
+            [
+                parts[0],
+                parts[1] if len(parts) > 1 else "",
+                "",
+                parts[2] if len(parts) > 2 else "",
+            ]
+        ]
     elif a.accounts:
         rows = parse_accounts(Path(a.accounts))
     else:
@@ -1176,14 +1911,26 @@ def main():
         card = parse_card(row)
         print(f"\n──── Tiến độ {i}/{len(rows)} ────")
         try:
-            rec = process(email, pw, sec, add=(not a.no_add and not a.list), card=card, plan=a.plan,
-                          no_switch=a.no_switch, list_only=a.list, stack=a.stack, old_token=a.old_token,
-                          stack_mode=a.mode)
+            rec = process(
+                email,
+                pw,
+                sec,
+                add=(not a.no_add and not a.list),
+                card=card,
+                plan=a.plan,
+                no_switch=a.no_switch,
+                list_only=a.list,
+                stack=a.stack,
+                old_token=a.old_token,
+                stack_mode=a.mode,
+                auto_subscribe=a.auto_subscribe,
+            )
         except Exception as e:
             rec = {"email": email, "status": "exception", "error": str(e)[:200]}
         results.append(rec)
         (REPORT_DIR / f"{email.split('@')[0]}.json").write_text(
-            json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
+            json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
         print(f"   Kết quả: {rec.get('status')}")
 
     print("\n" + "=" * 56)
@@ -1199,7 +1946,7 @@ entry = main
 
 
 # ---------- Tài nguyên nhúng (ĐỪNG SỬA) ----------
-FRIDA_JS = r'''// Script inject Ultra0: tra nhiều sản phẩm → tự chọn dùng thử miễn phí dài nhất → mở trang thanh toán ở luồng chính
+FRIDA_JS = r"""// Script inject Ultra0: tra nhiều sản phẩm → tự chọn dùng thử miễn phí dài nhất → mở trang thanh toán ở luồng chính
 var dexLoader=null, ctxRef=null, clientRef=null;
 var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];   // 5x / 20x (kèm dùng thử) / 20x (gói khác)
 var PREFER="";        // Để trống = tự chọn dài nhất; có thể truyền "eft-12month" v.v.
@@ -1207,7 +1954,7 @@ function L(v){ Java.classFactory.loader=v; }
 function S(o){ send(o); }
 
 function periodRank(p){
-  var m={"P1Y":12,"P12M":12,"P6M":6,"P3M":3,"P1M":1};
+  var m={"P1Y":12,"P12M":12,"P6M":6,"P3M":3,"P2M":2,"P1M":1};
   return m[String(p)]||0;
 }
 function getActivity(){
@@ -1402,7 +2149,7 @@ var iv=setInterval(function(){
   }
 },400);
 
-'''
+"""
 
 MODULE_B64 = (
     "UEsDBBQAAAAIANFzcV3Bb+8WR50BAIj0AwALABwAY2xhc3Nlcy5kZXhVVAkAA4n0+2qJ9PtqdXgLAAEE9QEAAAQAAAAAnJ0HdJXF9vZnTs459NA7IhA6kSIY"
@@ -2587,8 +3334,3 @@ MODULE_B64 = (
 
 if __name__ == "__main__":
     sys.exit(entry())
-
-
-
-
-

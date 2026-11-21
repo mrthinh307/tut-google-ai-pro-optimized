@@ -8,7 +8,7 @@ Bộ công cụ tự động hóa kiểm tra offer, đăng ký dùng thử **0 �
 
 ## 1. Công cụ này hoạt động như thế nào?
 
-Nhiều ưu đãi dùng thử miễn phí của Google One (như `12months-eft`, `6months-eft`, `eft-3months`, …) không hiển thị trực tiếp trên giao diện web hay trong app, nhưng lại tồn tại trong dữ liệu trả về của thư viện **Google Play Billing (`BillingClient`)**.
+Nhiều ưu đãi dùng thử miễn phí của Google One (như `12months-eft`, `6months-eft`, `eft-2months`, …) không hiển thị trực tiếp trên giao diện web hay trong app, nhưng lại tồn tại trong dữ liệu trả về của thư viện **Google Play Billing (`BillingClient`)**.
 
 Thay vì phải chỉnh sửa APK hay cài Xposed, `ultra0.py` hoạt động theo cơ chế **tiêm script runtime (Frida)**:
 
@@ -40,7 +40,7 @@ Thay vì phải chỉnh sửa APK hay cài Xposed, `ultra0.py` hoạt động th
 | `3_Pro_Them_6_thang_Buoc_2.bat` | Bước 2: Cộng dồn thêm **6 tháng** (`--stack --plan pro6`)                                                                 |
 | `4_Pro_Them_6_thang_Buoc_3.bat` | Bước 3: Cộng dồn thêm **6 tháng** nữa (`--stack --plan pro6b`)                                                            |
 | `5_Pro_Du_phong_6_thang.bat`    | Dự phòng: Cộng dồn thêm **6 tháng** (`--stack --plan pro6c`)                                                              |
-| `6_Pro_3_thang_eft.bat`         | Gói **3 tháng** (`--stack --plan pro3`)                                                                                   |
+| `6_Pro_3_thang_eft.bat`         | Gói **2 tháng** (`--stack --plan pro2`)                                                                                   |
 | `7_Auto_Chay_2_den_6.bat`       | Chạy tự động lần lượt từ file `2` đến `6`; gặp lỗi tự nhảy bước tiếp theo, xong lượt đầu sẽ random cho đến khi thành công |
 | `ultra0.py`                     | Script lõi thực thi toàn bộ quy trình ADB, đồng bộ tài khoản, Frida inject và auto UI                                     |
 | `setup_env.py`                  | Script kiểm tra Python, cài `frida==16.5.9`, tìm/tải `adb` và kết nối giả lập                                             |
@@ -99,7 +99,7 @@ Chạy lần lượt theo thứ tự:
 2. **`3_Pro_Them_6_thang_Buoc_2.bat`** → Cộng dồn thêm 6 tháng (`pro6`, tổng ~18 tháng).
 3. **`4_Pro_Them_6_thang_Buoc_3.bat`** → Cộng dồn thêm 6 tháng (`pro6b`, tổng ~24 tháng).
 4. **`5_Pro_Du_phong_6_thang.bat`** → Cộng dồn thêm 6 tháng dự phòng (`pro6c`).
-5. **`6_Pro_3_thang_eft.bat`** → Thử thêm gói 3 tháng (`pro3`).
+5. **`6_Pro_3_thang_eft.bat`** → Thử thêm gói 2 tháng (`pro2`).
 
 > **Cách nhận biết trang thanh toán cộng dồn ĐÚNG:**
 >
@@ -128,7 +128,7 @@ Bấm đúp **`7_Auto_Chay_2_den_6.bat`**:
 | `pro6`                | `3_Pro_Them_6_thang_Buoc_2.bat` | `g1.2tb.ai.subs_variant`                    | `6months-eft`         | Cộng dồn +6 tháng (bước 2)                                 |
 | `pro6b`               | `4_Pro_Them_6_thang_Buoc_3.bat` | `g1.2tb.ai.subs_variant`                    | `6months-eft-2`       | Cộng dồn +6 tháng (bước 3)                                 |
 | `pro6c`               | `5_Pro_Du_phong_6_thang.bat`    | `g1.2tb.ai.subs_variant`                    | `6months-eft-ss-2026` | Cộng dồn +6 tháng dự phòng                                 |
-| `pro3`                | `6_Pro_3_thang_eft.bat`         | `g1.2tb.ai.3months_eft`                     | `eft-3months`         | Gói 3 tháng                                                |
+| `pro2` / `pro3`       | `6_Pro_3_thang_eft.bat`         | `g1.2tb.ai.2months_eft`                     | `eft-2months`         | Gói 2 tháng                                                |
 | `5x` / `20x` / `auto` | _(CLI)_                         | `g1.play.20tb`, `g1.play.ai.pro`, `g1.30tb` | Tự chọn dài nhất      | Gói Ultra cũ (thường không còn offer cho tài khoản thường) |
 
 ---
@@ -159,7 +159,7 @@ python ultra0.py accounts.txt --plan pro12
 
 - `--check`: Tự kiểm tra kết nối ADB, root, Frida, module Billing và Play Store.
 - `--list`: Chỉ tra và in danh sách offer, không mở trang thanh toán.
-- `--plan {auto,5x,20x,pro12,pro6,pro6b,pro6c,pro3}`: Chọn gói/offer cần xử lý.
+- `--plan {auto,5x,20x,pro12,pro6,pro6b,pro6c,pro2,pro3}`: Chọn gói/offer cần xử lý.
 - `--stack`: Bật chế độ nâng cấp cộng dồn dựa trên `purchaseToken` hiện tại.
 - `--old-token <token>`: Truyền thủ công `purchaseToken` cũ khi dùng kèm `--stack`.
 - `--mode <1..5>`: Chọn `prorationMode` khi nâng cấp (mặc định khi stack là `5` = `CHARGE_FULL_PRICE`).
@@ -173,7 +173,7 @@ python ultra0.py accounts.txt --plan pro12
 Yêu cầu đã bật `frida-server` (hoặc forward cổng `27042`) và Google One đang mở:
 
 ```bash
-python query_sku.py g1.2tb.ai.subs_variant g1.2tb.ai.3months_eft
+python query_sku.py g1.2tb.ai.subs_variant g1.2tb.ai.2months_eft
 ```
 
 ---

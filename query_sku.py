@@ -2,6 +2,7 @@
 
 Cách dùng: python query_sku.py g1.2tb.ai.subs_variant [SKU khác...]
 """
+
 import json
 import sys
 import threading
@@ -24,7 +25,9 @@ def main():
         raise SystemExit("Không tìm thấy tiến trình Google One")
 
     js = ultra0.build_js("5x", True)
-    js = js.replace('var PRODUCTS=["g1.play.20tb"];', 'var PRODUCTS=' + json.dumps(skus) + ';', 1)
+    js = js.replace(
+        'var PRODUCTS=["g1.play.20tb"];', "var PRODUCTS=" + json.dumps(skus) + ";", 1
+    )
 
     sess = dev.attach(pid)
     done = threading.Event()
@@ -49,8 +52,10 @@ def main():
         print("  (Không có offer nào được trả về)")
     for o in offers:
         micros = str(o.get("micros"))
-        price = "Miễn phí" if micros == "0" else f"${int(micros)/1_000_000:.2f}"
-        print(f"  offerId={str(o.get('id')):22s} {price:>9s}  {o.get('period')}   [{o.get('title') or o.get('name') or ''}]")
+        price = "Miễn phí" if micros == "0" else f"${int(micros) / 1_000_000:.2f}"
+        print(
+            f"  offerId={o.get('id')!s:22s} {price:>9s}  {o.get('period')}   [{o.get('title') or o.get('name') or ''}]"
+        )
         if micros == "0":
             print(f"      token={o.get('token')}")
     try:

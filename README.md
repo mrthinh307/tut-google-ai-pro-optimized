@@ -8,7 +8,7 @@ An automation toolkit for inspecting hidden offers, claiming **$0 free trials**,
 
 ## 1. How It Works
 
-Many Google One promotional trial offers (such as `12months-eft`, `6months-eft`, `eft-3months`, etc.) are not displayed in the web UI or inside the app, but are returned directly by the **Google Play Billing (`BillingClient`)** library.
+Many Google One promotional trial offers (such as `12months-eft`, `6months-eft`, `eft-2months`, etc.) are not displayed in the web UI or inside the app, but are returned directly by the **Google Play Billing (`BillingClient`)** library.
 
 Instead of patching APKs or installing Xposed, `ultra0.py` uses **runtime Frida injection**:
 
@@ -40,7 +40,7 @@ Instead of patching APKs or installing Xposed, `ultra0.py` uses **runtime Frida 
 | `3_Pro_Them_6_thang_Buoc_2.bat` | Step 2: Stack **+6 months** (`--stack --plan pro6`)                                                                     |
 | `4_Pro_Them_6_thang_Buoc_3.bat` | Step 3: Stack another **+6 months** (`--stack --plan pro6b`)                                                            |
 | `5_Pro_Du_phong_6_thang.bat`    | Backup: Stack **+6 months** (`--stack --plan pro6c`)                                                                    |
-| `6_Pro_3_thang_eft.bat`         | Stack / claim the **3-month** offer (`--stack --plan pro3`)                                                             |
+| `6_Pro_3_thang_eft.bat`         | Stack / claim the **2-month** offer (`--stack --plan pro2`)                                                             |
 | `7_Auto_Chay_2_den_6.bat`       | Automated runner looping scripts `2` through `6`; advances on error and falls back to random retries until one succeeds |
 | `ultra0.py`                     | Core script handling ADB automation, account sync, Frida injection, and Billing UI confirmation                         |
 | `setup_env.py`                  | Checks Python, installs `frida==16.5.9`, locates/downloads `adb`, connects emulator, and runs `--check`                 |
@@ -97,7 +97,7 @@ Run the batch scripts in order:
 2. **`3_Pro_Them_6_thang_Buoc_2.bat`** → Stack +6 months (`pro6`, ~18 months total).
 3. **`4_Pro_Them_6_thang_Buoc_3.bat`** → Stack +6 months (`pro6b`, ~24 months total).
 4. **`5_Pro_Du_phong_6_thang.bat`** → Stack backup +6 months (`pro6c`).
-5. **`6_Pro_3_thang_eft.bat`** → Attempt +3 months (`pro3`).
+5. **`6_Pro_3_thang_eft.bat`** → Attempt +2 months (`pro2`).
 
 > **How to verify a VALID stacked checkout sheet:**
 >
@@ -126,7 +126,7 @@ Double-click **`7_Auto_Chay_2_den_6.bat`**:
 | `pro6`                | `3_Pro_Them_6_thang_Buoc_2.bat` | `g1.2tb.ai.subs_variant`                    | `6months-eft`         | Stack +6 months (step 2)                                |
 | `pro6b`               | `4_Pro_Them_6_thang_Buoc_3.bat` | `g1.2tb.ai.subs_variant`                    | `6months-eft-2`       | Stack +6 months (step 3)                                |
 | `pro6c`               | `5_Pro_Du_phong_6_thang.bat`    | `g1.2tb.ai.subs_variant`                    | `6months-eft-ss-2026` | Stack +6 months (backup)                                |
-| `pro3`                | `6_Pro_3_thang_eft.bat`         | `g1.2tb.ai.3months_eft`                     | `eft-3months`         | 3-month trial offer                                     |
+| `pro2` / `pro3`       | `6_Pro_3_thang_eft.bat`         | `g1.2tb.ai.2months_eft`                     | `eft-2months`         | 2-month trial offer                                     |
 | `5x` / `20x` / `auto` | _(CLI)_                         | `g1.play.20tb`, `g1.play.ai.pro`, `g1.30tb` | Longest available     | Legacy Ultra plans (rarely offered to regular accounts) |
 
 ---
@@ -157,7 +157,7 @@ python ultra0.py accounts.txt --plan pro12
 
 - `--check`: Run ADB, root, Frida, Billing module, and Play Store diagnostics.
 - `--list`: Query and print offers/tokens without launching checkout.
-- `--plan {auto,5x,20x,pro12,pro6,pro6b,pro6c,pro3}`: Select the target plan/offer.
+- `--plan {auto,5x,20x,pro12,pro6,pro6b,pro6c,pro2,pro3}`: Select the target plan/offer.
 - `--stack`: Enable subscription upgrade stacking using the current active `purchaseToken`.
 - `--old-token <token>`: Manually supply `oldPurchaseToken` when using `--stack`.
 - `--mode <1..5>`: Override `prorationMode` (defaults to `5` = `CHARGE_FULL_PRICE` when stacking).
@@ -171,7 +171,7 @@ python ultra0.py accounts.txt --plan pro12
 Requires `frida-server` running (or forwarded on `127.0.0.1:27042`) with Google One open:
 
 ```bash
-python query_sku.py g1.2tb.ai.subs_variant g1.2tb.ai.3months_eft
+python query_sku.py g1.2tb.ai.subs_variant g1.2tb.ai.2months_eft
 ```
 
 ---

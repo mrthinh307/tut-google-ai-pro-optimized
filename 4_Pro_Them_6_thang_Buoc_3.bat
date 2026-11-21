@@ -7,7 +7,7 @@ echo ============================================
 echo   Google AI Pro 5TB - them 6 thang (buoc 3)
 echo   Tong cong se thanh 24 thang
 echo ============================================
-python ultra0.py --account "current@device" --no-add --force --stack --plan pro6b
+python ultra0.py --account "current@device" --no-add --force --stack --plan pro6b %*
 set EXIT_CODE=%ERRORLEVEL%
 if defined AUTO_FLOW exit /b %EXIT_CODE%
 echo.

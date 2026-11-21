@@ -7,7 +7,7 @@ set AUTO_FLOW=1
 
 echo ============================================================
 echo   LUONG TU DONG CHAY FILE BAT 2 -^> 6 (Google AI Pro 5TB)
-echo   - Tu dong an Subscribe khi Module thanh toan hien len
+echo   - Mac dinh KHONG tu dong bam Subscribe (them --auto-subcribe de bat)
 echo   - Gap hop thoai Error -^> Dung ngay bat hien tai, chay bat tiep theo
 echo   - Dung lai ngay khi Successful (hoac het luot dau)
 echo ============================================================
@@ -27,7 +27,7 @@ for %%F in (
 ) do (
     echo.
     echo ^>^>^> Dang chay: %%~F ...
-    call "%%~F"
+    call "%%~F" %*
     if not errorlevel 1 (
         echo.
         echo ============================================================
