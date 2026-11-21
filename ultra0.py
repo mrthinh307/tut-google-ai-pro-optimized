@@ -1038,10 +1038,44 @@ def switch_play(email) -> bool:
 # ---------- Frida ----------
 def launch_app() -> int:
     sh("shell", f"am force-stop {PKG}")
-    sh("shell", f"monkey -p {PKG} -c android.intent.category.LAUNCHER 1")
-    time.sleep(7)
-    pid = sh("shell", f"pidof {PKG}")
-    return int(pid) if pid.strip().isdigit() else 0
+    # Đóng hộp thoại Play Billing cũ nếu đang nằm đè trên cùng Task của Google One
+    sh("shell", "input keyevent 4; input keyevent 3")
+    time.sleep(0.8)
+    sh(
+        "shell",
+        f"am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER "
+        f"-f 0x10008000 -n {PKG}/.LauncherActivity 2>/dev/null || "
+        f"monkey -p {PKG} -c android.intent.category.LAUNCHER 1",
+    )
+    for _ in range(10):
+        time.sleep(1)
+        pid = sh("shell", f"pidof {PKG}").strip()
+        if pid:
+            first_pid = pid.split()[0]
+            if first_pid.isdigit():
+                time.sleep(3)
+                return int(first_pid)
+    return 0
+
+
+PRO_EFT_PLANS = {
+    "pro1": ("g1.2tb.ai.1month_eft", "eft-1month"),
+    "pro2": ("g1.2tb.ai.2months_eft", "eft-2months"),
+    "pro3": ("g1.2tb.ai.3months_eft", "eft-3months"),
+    "pro4": ("g1.2tb.ai.4months_eft", "eft-4months"),
+    "pro6eft": ("g1.2tb.ai.6months_eft", "eft-6months"),
+    "pro12eft": ("g1.2tb.ai.12months_eft", "eft-12months"),
+}
+
+ALL_PRO_SKUS = [
+    "g1.2tb.ai.subs_variant",
+    "g1.2tb.ai.1month_eft",
+    "g1.2tb.ai.2months_eft",
+    "g1.2tb.ai.3months_eft",
+    "g1.2tb.ai.4months_eft",
+    "g1.2tb.ai.6months_eft",
+    "g1.2tb.ai.12months_eft",
+]
 
 
 def build_js(
@@ -1075,13 +1109,15 @@ def build_js(
             'var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];',
             'var PRODUCTS=["g1.play.20tb"];',
         )
-    elif plan in ("pro2", "pro3"):
-        # Google AI Pro 2TB/5TB (g1.2tb.ai.2months_eft): eft-2months
+    elif plan in PRO_EFT_PLANS:
+        sku, prefer = PRO_EFT_PLANS[plan]
+        prods = json.dumps(ALL_PRO_SKUS) if list_only else json.dumps([sku])
         js = js.replace(
             'var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];',
-            'var PRODUCTS=["g1.2tb.ai.2months_eft"];',
+            f"var PRODUCTS={prods};",
         )
-        js = js.replace('var PREFER="";', 'var PREFER="eft-2months";', 1)
+        if not list_only:
+            js = js.replace('var PREFER="";', 'var PREFER="%s";' % prefer, 1)
     elif plan.startswith("pro"):
         # Google AI Pro 5TB (g1.2tb.ai.subs_variant）：12months-eft / 6months-eft / 6months-eft-2 / 6months-eft-ss-2026
         prefer = {
@@ -1091,7 +1127,7 @@ def build_js(
             "pro6c": "6months-eft-ss-2026",
         }.get(plan, "12months-eft")
         prods = (
-            '["g1.2tb.ai.subs_variant","g1.2tb.ai.2months_eft"]'
+            json.dumps(ALL_PRO_SKUS)
             if list_only
             else '["g1.2tb.ai.subs_variant"]'
         )
@@ -1099,7 +1135,8 @@ def build_js(
             'var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];',
             f"var PRODUCTS={prods};",
         )
-        js = js.replace('var PREFER="";', 'var PREFER="%s";' % prefer, 1)
+        if not list_only:
+            js = js.replace('var PREFER="";', 'var PREFER="%s";' % prefer, 1)
     return js
 
 
@@ -1135,7 +1172,9 @@ def run_trial(
         ev = p.get("ev")
         if ev == "offer":
             res["offers"].append(p)
-            note(f"offer {p.get('id')} → {p.get('micros')} ({p.get('p0', '')})")
+            note(
+                f"offer [{p.get('product', '')}] {p.get('id')} → {p.get('micros')} ({p.get('period', '')})"
+            )
             note(f"    token={p.get('token', '')}")
         elif ev == "list_only":
             res["list_done"] = True
@@ -1157,6 +1196,10 @@ def run_trial(
             note(f"Callback thanh toán:{p}")
         elif ev and ("err" in ev or ev.startswith("no_")):
             res["errors"].append(p)
+            if ev == "no_product":
+                warn(
+                    f"Play Billing không trả về SKU nào (code={p.get('code')}, n={p.get('n')}) — kiểm tra lại mã SKU"
+                )
 
     try:
         sc = sess.create_script(build_js(plan, list_only, stack, old_token, stack_mode))
@@ -1171,6 +1214,7 @@ def run_trial(
             if any(
                 e.get("ev")
                 in (
+                    "no_product",
                     "no_trial",
                     "boot_err",
                     "query_err",
@@ -1190,7 +1234,7 @@ def run_trial(
                 account_email=account_email,
                 old_token=old_token,
                 auto_subscribe=auto_subscribe,
-                allow_1month=False,
+                allow_1month=(plan == "pro1"),
             )
     finally:
         try:
@@ -1446,6 +1490,7 @@ def confirm_zero(
     }
     end_t = time.time() + wait
     tapped_at = 0.0
+    tapped_count = 0
     saw_sheet = False
     manual_notified = False
     unverified_polls = 0
@@ -1501,6 +1546,9 @@ def confirm_zero(
                     "quản lý gói đăng ký",
                     "play points",
                     "điểm play",
+                    "backup payment",
+                    "phương thức thanh toán dự phòng",
+                    "备用付款方式",
                 )
             ) or ("已订阅" in text):
                 if auto_subscribe:
@@ -1582,13 +1630,21 @@ def confirm_zero(
                 time.sleep(1.5)
                 continue
 
-            # Chỉ cho phép tự bấm Subscribe tối đa 1 lần trong một phiên (tránh bấm lại lần 2 nếu Play reload sheet sang trả phí)
-            if out["confirmed"]:
+            # Cho phép tối đa 2 lần bấm nếu lần đầu bị Play/Android nuốt tap trong lúc sheet mới mở
+            # (chỉ bấm lại sau >=6s khi trang thanh toán VẪN qua toàn bộ bước xác minh Trial 0đ ở trên)
+            if tapped_count >= 2:
                 time.sleep(1.5)
                 continue
+            if tapped_count == 1 and (time.time() - tapped_at) < 6.0:
+                time.sleep(1.5)
+                continue
+            if tapped_count == 0:
+                # Đợi ngắn để cửa sổ Play Billing ổn định nhận sự kiện chạm (tránh bị nuốt tap đầu)
+                time.sleep(1.2)
 
+            tapped_count += 1
             note(
-                f"Đã xác minh Trial 0đ ({reason}) → Ấn '{sub_btn['text'].strip()}' tại ({sub_btn['x']}, {sub_btn['y']})"
+                f"Đã xác minh Trial 0đ ({reason}) → Ấn '{sub_btn['text'].strip()}' lần {tapped_count} tại ({sub_btn['x']}, {sub_btn['y']})"
             )
             tap(sub_btn["x"], sub_btn["y"])
             out["confirmed"] = True
@@ -1737,7 +1793,7 @@ def process(
             account_email=real_email,
             old_token=old_token,
             auto_subscribe=auto_subscribe,
-            allow_1month=False,
+            allow_1month=(plan == "pro1"),
         )
         rec["sheet"] = sheet
         if sheet.get("success"):
@@ -1857,8 +1913,22 @@ def main():
     ap.add_argument(
         "--plan",
         default="auto",
-        choices=["auto", "5x", "20x", "pro12", "pro6", "pro6b", "pro6c", "pro2", "pro3"],
-        help="auto=tra cả hai gói rồi chọn gói dài nhất; 5x=Ultra 20TB; 20x=Ultra 30TB; pro2/pro3=g1.2tb.ai.2months_eft (eft-2months)",
+        choices=[
+            "auto",
+            "5x",
+            "20x",
+            "pro12",
+            "pro6",
+            "pro6b",
+            "pro6c",
+            "pro1",
+            "pro2",
+            "pro3",
+            "pro4",
+            "pro6eft",
+            "pro12eft",
+        ],
+        help="auto/5x/20x=Ultra; pro12/pro6/pro6b/pro6c=subs_variant; pro1/pro2/pro3/pro4/pro6eft/pro12eft=g1.2tb.ai.<1/2/3/4/6/12>month(s)_eft",
     )
     ap.add_argument(
         "--auto-subcribe",
@@ -1948,13 +2018,14 @@ entry = main
 # ---------- Tài nguyên nhúng (ĐỪNG SỬA) ----------
 FRIDA_JS = r"""// Script inject Ultra0: tra nhiều sản phẩm → tự chọn dùng thử miễn phí dài nhất → mở trang thanh toán ở luồng chính
 var dexLoader=null, ctxRef=null, clientRef=null;
+var __queried=false, __launched=false;
 var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];   // 5x / 20x (kèm dùng thử) / 20x (gói khác)
 var PREFER="";        // Để trống = tự chọn dài nhất; có thể truyền "eft-12month" v.v.
 function L(v){ Java.classFactory.loader=v; }
 function S(o){ send(o); }
 
 function periodRank(p){
-  var m={"P1Y":12,"P12M":12,"P6M":6,"P3M":3,"P2M":2,"P1M":1};
+  var m={"P1Y":12,"P12M":12,"P6M":6,"P5M":5,"P4M":4,"P3M":3,"P2M":2,"P1M":1};
   return m[String(p)]||0;
 }
 function getActivity(){
@@ -1988,8 +2059,8 @@ function boot(){
    var SLL=Java.use("com.android.billingclient.api.BillingClientStateListener");
    var SL=Java.registerClass({name:"rc.B"+Date.now(), implements:[SLL], methods:{
      onBillingSetupFinished:function(r){ S({ev:"setup", code:r.getResponseCode()});
-        if(r.getResponseCode()===0) query(); },
-     onBillingServiceDisconnected:function(){ S({ev:"disc"}); }}});
+        if(r.getResponseCode()===0 && !__queried){ __queried=true; query(); } },
+     onBillingServiceDisconnected:function(){ S({ev:"disc"}); __queried=false; __launched=false; }}});
    clientRef.startConnection(SL.$new());
    S({ev:"connecting", products:PRODUCTS});
   }catch(e){ S({ev:"boot_err", m:String(e).slice(0,200)}); }
@@ -2004,7 +2075,7 @@ function query(){
   var PL=Java.registerClass({name:"rc.C"+Date.now(), implements:[PDL], methods:{
     onProductDetailsResponse:function(res,list){
       S({ev:"pd", code:res.getResponseCode(), n:(list?list.size():0)});
-      if(res.getResponseCode()!==0 || !list || list.size()===0) return;
+      if(res.getResponseCode()!==0 || !list || list.size()===0){ S({ev:"no_product", code:res.getResponseCode(), n:(list?list.size():0)}); return; }
       L(dexLoader);
       var PD=Java.use("com.android.billingclient.api.ProductDetails");
       var SOD=Java.use("com.android.billingclient.api.ProductDetails$SubscriptionOfferDetails");
@@ -2091,6 +2162,8 @@ function launchWithStack(pd, offer){
 }
 
 function launch(pd, offer, oldTok){
+ if(__launched) return;
+ __launched=true;
  try{
   L(dexLoader);
   var PDP=Java.use("com.android.billingclient.api.BillingFlowParams$ProductDetailsParams");
