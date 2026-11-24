@@ -199,30 +199,69 @@ def ensure_root():
         )
 
 
+def get_frida_device(timeout: int = 10):
+    """Tìm thiết bị Frida chính xác dựa theo SERIAL hoặc USB/Emulator."""
+    import frida
+
+    target = globals().get("SERIAL")
+    if target:
+        try:
+            return frida.get_device(target, timeout=timeout)
+        except Exception:
+            pass
+    try:
+        return frida.get_usb_device(timeout=timeout)
+    except Exception:
+        pass
+    try:
+        dm = frida.get_device_manager()
+        for d in dm.enumerate_devices():
+            if target and (d.id == target or target in d.name):
+                return d
+        return dm.get_device(target or "127.0.0.1:7555", timeout=timeout)
+    except Exception:
+        return frida.get_usb_device(timeout=timeout)
+
+
 def ensure_frida_server():
+    try:
+        import frida
+
+        ver = frida.__version__
+    except Exception:
+        sys.exit("❌ Máy tính chưa cài frida. Hãy chạy trước: pip3 install frida")
+
+    def test_connection() -> bool:
+        try:
+            dev = get_frida_device(timeout=3)
+            dev.enumerate_processes()
+            return True
+        except Exception:
+            return False
+
     ps_frida = sh(
         "shell", "ps -A -o PID,ARGS | grep frida-server | grep -v grep || true"
     )
     if "frida-server" in ps_frida:
         # Cần cờ -P (--disable-preload) để frida-server không tiêm frida-agent vào zygote64 gây treo Play Store trên MuMu Android 12
-        if " -P" in ps_frida or "--disable-preload" in ps_frida:
-            ok("frida-server đang chạy")
+        if (" -P" in ps_frida or "--disable-preload" in ps_frida) and test_connection():
+            ok("frida-server đang chạy (-P) và kết nối tốt")
             return
         warn(
-            "frida-server đang chạy thiếu cờ -P (có thể gây treo Google Play), đang khởi động lại với -P…"
+            "frida-server đang chạy nhưng thiếu cờ -P hoặc không phản hồi giao tiếp, đang khởi động lại với -P…"
         )
         sh("shell", "killall frida-server 2>/dev/null || true", timeout=10)
         time.sleep(1.5)
-    if not sh("shell", f"ls {FRIDA_REMOTE} 2>/dev/null"):
-        warn(
-            "Trên thiết bị chưa có frida-server, đang thử tải tự động theo phiên bản frida trên máy…"
-        )
-        try:
-            import frida
 
-            ver = frida.__version__
-        except Exception:
-            sys.exit("❌ Máy tính chưa cài frida. Hãy chạy trước: pip3 install frida")
+    # Đảm bảo file nhị phân trên thiết bị tồn tại, có quyền thực thi và khớp version
+    sh("shell", f"chmod 755 {FRIDA_REMOTE} 2>/dev/null || true")
+    remote_ver = sh("shell", f"{FRIDA_REMOTE} --version 2>/dev/null").strip()
+
+    if not remote_ver or remote_ver != ver:
+        warn(
+            f"frida-server trên thiết bị ({remote_ver or 'chưa có'}) khác với frida máy tính ({ver}), đang cập nhật bản khớp…"
+        )
+        sh("shell", "killall frida-server 2>/dev/null || true", timeout=10)
         abi = sh("shell", "getprop ro.product.cpu.abi").strip() or "arm64-v8a"
         arch = {
             "arm64-v8a": "arm64",
@@ -239,15 +278,18 @@ def ensure_frida_server():
         import lzma
         import urllib.request
 
-        tmp = Path(tempfile.gettempdir()) / "frida-server.xz"
-        note(f"Đang tải {url}")
-        with urllib.request.urlopen(url, timeout=120) as r, open(tmp, "wb") as f:
-            f.write(r.read())
-        raw = Path(tempfile.gettempdir()) / "frida-server"
-        with lzma.open(tmp, "rb") as fi, open(raw, "wb") as fo:
-            fo.write(fi.read())
+        tmp = Path(tempfile.gettempdir()) / f"frida-server-{ver}-{arch}.xz"
+        raw = Path(tempfile.gettempdir()) / f"frida-server-{ver}-{arch}"
+        if not raw.exists():
+            note(f"Đang tải {url}")
+            with urllib.request.urlopen(url, timeout=120) as r, open(tmp, "wb") as f:
+                f.write(r.read())
+            with lzma.open(tmp, "rb") as fi, open(raw, "wb") as fo:
+                fo.write(fi.read())
         sh("push", str(raw), FRIDA_REMOTE, timeout=180)
         sh("shell", f"chmod 755 {FRIDA_REMOTE}")
+
+    sh("shell", f"chmod 755 {FRIDA_REMOTE}")
     is_root = "uid=0" in sh("shell", "id")
     if is_root:
         sh("shell", f"nohup {FRIDA_REMOTE} -P -D >/dev/null 2>&1 &", timeout=15)
@@ -256,9 +298,10 @@ def ensure_frida_server():
     for _ in range(20):
         time.sleep(0.5)
         if "frida-server" in sh("shell", "ps -A | grep frida-server || true"):
-            ok("frida-server đã khởi động (-P)")
-            return
-    sys.exit("❌ Khởi động frida-server thất bại")
+            if test_connection():
+                ok("frida-server đã khởi động (-P) và kết nối thành công")
+                return
+    sys.exit("❌ Khởi động frida-server thất bại hoặc không thể kết nối từ Python")
 
 
 def read_purchase_info(sku_short: str, account_email: str = "") -> dict:
@@ -1155,8 +1198,23 @@ def run_trial(
     import frida
 
     step("Đang inject module thanh toán, tra dùng thử miễn phí")
-    dev = frida.get_usb_device(timeout=10)
-    sess = dev.attach(pid)
+    try:
+        dev = get_frida_device(timeout=10)
+        sess = dev.attach(pid)
+    except Exception as e:
+        err_msg = str(e).lower()
+        if (
+            "unable to communicate with remote frida-server" in err_msg
+            or "transport" in err_msg
+            or "connection" in err_msg
+            or "closed" in err_msg
+        ):
+            warn(f"Lỗi kết nối frida-server ({e}), đang tự động phục hồi frida-server...")
+            ensure_frida_server()
+            dev = get_frida_device(timeout=10)
+            sess = dev.attach(pid)
+        else:
+            raise
     res = {
         "offers": [],
         "launched": None,
@@ -1828,8 +1886,11 @@ def do_check():
         import frida
 
         ok(f"frida：{frida.__version__}")
-    except Exception:
-        warn("Máy tính chưa cài frida, hãy chạy: pip3 install frida")
+        dev = get_frida_device(timeout=5)
+        procs = dev.enumerate_processes()
+        ok(f"Giao tiếp frida-server thành công ({len(procs)} tiến trình)")
+    except Exception as e:
+        sys.exit(f"❌ Không thể giao tiếp với frida-server: {e}")
     ok("Tự kiểm tra môi trường đã đạt, có thể bắt đầu chạy tài khoản")
     return 0
 
