@@ -1,15 +1,15 @@
 @echo off
 chcp 65001 >nul
-title Cai dat moi truong mot cham
+title One-Click Environment Setup
 cd /d "%~dp0"
 set PYTHONIOENCODING=utf-8
 
 echo ============================================================
-echo   Google Ultra / Pro cai dat mot cham
-echo   - kiem tra Python
-echo   - cai frida 16.5.9
-echo   - tim hoac tai adb
-echo   - ket noi MuMu va tu kiem tra
+echo   Google Ultra / Pro One-Click Setup
+echo   - Check Python installation
+echo   - Install Frida 16.5.9
+echo   - Detect or download ADB
+echo   - Connect to MuMu emulator and run self-test
 echo ============================================================
 echo.
 pause
@@ -18,6 +18,6 @@ python setup_env.py
 
 echo.
 echo ------------------------------------------------------------
-echo   Xong. Neu toan xanh, bam dup 2_Pro_12_thang_Buoc_1.bat
+echo   Done. If all checks passed green, run 12months-eft.bat to begin.
 echo ------------------------------------------------------------
 pause

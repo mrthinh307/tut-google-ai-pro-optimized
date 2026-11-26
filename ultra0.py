@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Google AI Ultra mở 0 đồng —— script một chạm
+"""Google AI Ultra $0.00 Activator —— One-Click Automation Script
 
-Cách dùng (3 bước):
-    python3 ultra0.py --check            # 1. tự kiểm tra môi trường
-    python3 ultra0.py accounts.txt       # 2. chạy hàng loạt tài khoản
-    python3 ultra0.py --account a@b.com:mat_khau:khoa_2FA   # 1 tài khoản
+Usage (3 steps):
+    python3 ultra0.py --check            # 1. Environment self-test
+    python3 ultra0.py accounts.txt       # 2. Batch process accounts list
+    python3 ultra0.py --account a@b.com:password:2FA_key   # Single account
 
-accounts.txt Mỗi dòng một tài khoản:
+accounts.txt format (one account per line):
     email----password----recovery----totp
 
-Điều kiện cần có:
-    - Một điện thoại Android đã root, kết nối USB, đã bật gỡ lỗi USB
-    - Trên điện thoại đã đăng nhập tài khoản Google cần dùng (script cũng có thể tự thêm)
-    - Máy tính đã cài Python3 + frida (pip install frida)
+Prerequisites:
+    - Rooted Android device or emulator with USB/ADB debugging enabled
+    - Target Google account signed in on device (or script auto-adds)
+    - Python 3 + frida installed on PC (pip install frida)
 
-Script sẽ tự động: đẩy frida-server, đẩy module BillingClient, tra offer, dùng eft-12month để mở trang thanh toán,
-Chỉ bấm «Đăng ký» khi đã xác nhận số tiền là 0.
+The script automatically:
+    Deploys frida-server, injects BillingClient module, queries offers, initiates trial checkout,
+    and only confirms Subscribe when the charge amount is strictly verified to be $0.00.
 """
 
 import argparse
@@ -41,12 +42,12 @@ WAITING = {"on": False, "msg": ""}
 
 
 def wait_human(msg: str, timeout: int = 600) -> bool:
-    """Gặp xác minh người-máy thì tạm dừng, đợi người xử lý xong rồi tiếp tục."""
+    """Pauses for manual intervention (e.g. CAPTCHA, 2FA) and resumes when user completes it."""
     WAITING["on"] = True
     WAITING["msg"] = msg
-    print(f"\n⏸  Cần bạn thao tác:{msg}")
+    print(f"\n⏸  Manual action required: {msg}")
     print(
-        "   Xong thì bấm 【Enter】 để tiếp tục (bản web bấm «Tôi đã hoàn tất, tiếp tục»)",
+        "   Press [Enter] when completed to resume (or click 'I have completed, continue' on web)",
         flush=True,
     )
     HUMAN_EVENT.clear()
@@ -62,7 +63,7 @@ def wait_human(msg: str, timeout: int = 600) -> bool:
         except Exception:
             time.sleep(0.5)
     WAITING["on"] = False
-    print("▶  Tiếp tục chạy", flush=True)
+    print("▶  Resuming execution", flush=True)
     return True
 
 
@@ -1110,6 +1111,49 @@ PRO_EFT_PLANS = {
     "pro12eft": ("g1.2tb.ai.12months_eft", "eft-12months"),
 }
 
+ALL_EFT_PLANS = {
+    # --- Google AI Pro (g1.2tb.ai.subs_variant) ---
+    "12months-eft": ("g1.2tb.ai.subs_variant", "12months-eft"),
+    "6months-eft": ("g1.2tb.ai.subs_variant", "6months-eft"),
+    "6months-eft-2": ("g1.2tb.ai.subs_variant", "6months-eft-2"),
+    "6months-eft-ss-2026": ("g1.2tb.ai.subs_variant", "6months-eft-ss-2026"),
+    "pro12": ("g1.2tb.ai.subs_variant", "12months-eft"),
+    "pro6": ("g1.2tb.ai.subs_variant", "6months-eft"),
+    "pro6b": ("g1.2tb.ai.subs_variant", "6months-eft-2"),
+    "pro6c": ("g1.2tb.ai.subs_variant", "6months-eft-ss-2026"),
+
+    # --- Google AI Pro (EFT SKUs) ---
+    "g1.2tb.ai.1month_eft": ("g1.2tb.ai.1month_eft", "eft-1month"),
+    "g1.2tb.ai.2months_eft": ("g1.2tb.ai.2months_eft", "eft-2months"),
+    "g1.2tb.ai.3months_eft": ("g1.2tb.ai.3months_eft", "eft-3months"),
+    "g1.2tb.ai.4months_eft": ("g1.2tb.ai.4months_eft", "eft-4months"),
+    "g1.2tb.ai.6months_eft": ("g1.2tb.ai.6months_eft", "eft-6months"),
+    "g1.2tb.ai.12months_eft": ("g1.2tb.ai.12months_eft", "eft-12months"),
+    "pro1": ("g1.2tb.ai.1month_eft", "eft-1month"),
+    "pro2": ("g1.2tb.ai.2months_eft", "eft-2months"),
+    "pro3": ("g1.2tb.ai.3months_eft", "eft-3months"),
+    "pro4": ("g1.2tb.ai.4months_eft", "eft-4months"),
+    "pro6eft": ("g1.2tb.ai.6months_eft", "eft-6months"),
+    "pro12eft": ("g1.2tb.ai.12months_eft", "eft-12months"),
+
+    # --- Gemini AI Ultra 30TB ---
+    "g1.ai.ultra.12months_eft": ("g1.ai.ultra.12months_eft", ""),
+    "g1.ai.ultra.1month_eft": ("g1.ai.ultra.1month_eft", ""),
+    "g1.30tb.12months_eft": ("g1.30tb.12months_eft", ""),
+    "g1.30tb.1month_eft": ("g1.30tb.1month_eft", ""),
+    "g1.ai.pro.12months_eft": ("g1.ai.pro.12months_eft", ""),
+    "g1.ai.pro.1month_eft": ("g1.ai.pro.1month_eft", ""),
+    "g1.play.ai.pro.12months_eft": ("g1.play.ai.pro.12months_eft", ""),
+    "g1.play.ai.pro.1month_eft": ("g1.play.ai.pro.1month_eft", ""),
+
+    # --- Gemini AI Ultra 20TB ---
+    "g1.play.20tb.12months_eft": ("g1.play.20tb.12months_eft", ""),
+    "g1.play.20tb.1month_eft": ("g1.play.20tb.1month_eft", ""),
+    "g1.play.20tb": ("g1.play.20tb", "eft-12month"),
+    "5x": ("g1.play.20tb", "eft-12month"),
+    "20x": ("g1.play.ai.pro", "eft-12month"),
+}
+
 ALL_PRO_SKUS = [
     "g1.2tb.ai.subs_variant",
     "g1.2tb.ai.1month_eft",
@@ -1119,6 +1163,22 @@ ALL_PRO_SKUS = [
     "g1.2tb.ai.6months_eft",
     "g1.2tb.ai.12months_eft",
 ]
+
+ALL_ULTRA_SKUS = [
+    "g1.ai.ultra",
+    "g1.ai.ultra.12months_eft",
+    "g1.ai.ultra.1month_eft",
+    "g1.30tb",
+    "g1.30tb.12months_eft",
+    "g1.play.20tb",
+    "g1.play.20tb.12months_eft",
+    "g1.play.ai.pro",
+    "g1.play.ai.pro.12months_eft",
+    "g1.ai.pro",
+    "g1.ai.pro.12months_eft",
+]
+
+ALL_KNOWN_SKUS = ALL_ULTRA_SKUS + ALL_PRO_SKUS
 
 
 def build_js(
@@ -1142,7 +1202,34 @@ def build_js(
         js = js.replace(
             'var PREFER="";', 'var PREFER=""; var STACK_MODE=%d;' % stack_mode, 1
         )
-    if plan == "20x":
+    if plan == "all":
+        prods = json.dumps(ALL_KNOWN_SKUS)
+        js = js.replace(
+            'var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];',
+            f"var PRODUCTS={prods};",
+        )
+    elif plan == "ultra":
+        prods = json.dumps(ALL_ULTRA_SKUS)
+        js = js.replace(
+            'var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];',
+            f"var PRODUCTS={prods};",
+        )
+    elif plan in ALL_EFT_PLANS:
+        sku, prefer = ALL_EFT_PLANS[plan]
+        prods = json.dumps(ALL_PRO_SKUS) if (list_only and plan.startswith("pro")) else json.dumps([sku])
+        js = js.replace(
+            'var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];',
+            f"var PRODUCTS={prods};",
+        )
+        if prefer and not list_only:
+            js = js.replace('var PREFER="";', 'var PREFER="%s";' % prefer, 1)
+    elif plan.startswith("g1."):
+        prods = json.dumps([plan])
+        js = js.replace(
+            'var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];',
+            f"var PRODUCTS={prods};",
+        )
+    elif plan == "20x":
         js = js.replace(
             'var PRODUCTS=["g1.play.20tb","g1.play.ai.pro","g1.30tb"];',
             'var PRODUCTS=["g1.play.ai.pro","g1.ai.pro","g1.30tb"];',
@@ -1292,7 +1379,7 @@ def run_trial(
                 account_email=account_email,
                 old_token=old_token,
                 auto_subscribe=auto_subscribe,
-                allow_1month=(plan == "pro1"),
+                allow_1month=(plan == "pro1" or "1month" in str(plan).lower() or "1m" in str(plan).lower()),
             )
     finally:
         try:
@@ -1851,7 +1938,7 @@ def process(
             account_email=real_email,
             old_token=old_token,
             auto_subscribe=auto_subscribe,
-            allow_1month=(plan == "pro1"),
+            allow_1month=(plan == "pro1" or "1month" in str(plan).lower() or "1m" in str(plan).lower()),
         )
         rec["sheet"] = sheet
         if sheet.get("success"):
@@ -1925,71 +2012,56 @@ def parse_card(parts) -> dict | None:
 def main():
     global ADB, SERIAL
     ap = argparse.ArgumentParser(
-        description="Script một chạm mở Google AI Ultra 0 đồng"
+        description="One-click activation script for Google AI Ultra / Pro $0.00 free trial"
     )
     ap.add_argument(
         "accounts",
         nargs="?",
-        help="File tài khoản (mỗi dòng email----password----recovery----totp)",
+        help="Accounts file (each line: email----password----recovery----totp)",
     )
-    ap.add_argument("--account", help="1 tài khoản: email:password:totp")
-    ap.add_argument("--check", action="store_true", help="Chỉ tự kiểm tra môi trường")
+    ap.add_argument("--account", help="Single account: email:password:totp")
+    ap.add_argument("--check", action="store_true", help="Run environment self-test only")
     ap.add_argument(
         "--list",
         action="store_true",
-        help="Chỉ liệt kê offer và token, không mở trang thanh toán (không rủi ro)",
+        help="List available offers and tokens without opening checkout sheet (zero risk)",
     )
     ap.add_argument(
         "--force",
         action="store_true",
-        help="Bỏ qua kiểm tra tài khoản Play (dùng khi không đọc được tài khoản)",
+        help="Skip Play account verification (use when account cannot be read)",
     )
     ap.add_argument(
         "--mode",
         type=int,
         default=None,
-        help="Chế độ thay thế: 1=TIME_PRORATION 2=CHARGE_PRORATED_PRICE 3=WITHOUT_PRORATION 4=DEFERRED 5=CHARGE_FULL_PRICE",
+        help="Replacement mode: 1=TIME_PRORATION 2=CHARGE_PRORATED_PRICE 3=WITHOUT_PRORATION 4=DEFERRED 5=CHARGE_FULL_PRICE",
     )
     ap.add_argument(
         "--old-token",
         default="",
-        help="purchaseToken của gói đăng ký hiện tại (dùng kèm --stack, lấy nó để nâng cấp luôn, bỏ qua queryPurchases)",
+        help="purchaseToken of active subscription (used with --stack to upgrade directly, bypassing queryPurchases)",
     )
     ap.add_argument(
         "--stack",
         action="store_true",
-        help="Cộng dồn bằng nâng cấp gói đăng ký: dùng purchaseToken cũ + CHARGE_FULL_PRICE để mở thanh toán, thời gian dùng thử còn lại sẽ được quy đổi và dời lại",
+        help="Stack time by subscription upgrade: uses old purchaseToken + CHARGE_FULL_PRICE so remaining trial time is deferred and stacked",
     )
-    ap.add_argument("--serial", default=None)
+    ap.add_argument("--serial", default=None, help="Specific ADB device serial")
     ap.add_argument(
         "--no-add",
         action="store_true",
-        help="Bỏ qua tự thêm tài khoản (tài khoản đã có trên điện thoại)",
+        help="Skip automatic account login (account already signed in on device)",
     )
     ap.add_argument(
         "--no-switch",
         action="store_true",
-        help="Không tự chuyển tài khoản, chỉ kiểm tra tài khoản Play hiện tại có phải tài khoản cần dùng không",
+        help="Do not automatically switch accounts, only verify if active Play account matches target",
     )
     ap.add_argument(
         "--plan",
         default="auto",
-        choices=[
-            "auto",
-            "5x",
-            "20x",
-            "pro12",
-            "pro6",
-            "pro6b",
-            "pro6c",
-            "pro1",
-            "pro2",
-            "pro3",
-            "pro4",
-            "pro6eft",
-            "pro12eft",
-        ],
-        help="auto/5x/20x=Ultra; pro12/pro6/pro6b/pro6c=subs_variant; pro1/pro2/pro3/pro4/pro6eft/pro12eft=g1.2tb.ai.<1/2/3/4/6/12>month(s)_eft",
+        help="Plan or SKU ID (e.g. 12months-eft, g1.ai.ultra.12months_eft, 5x, 20x...)",
     )
     ap.add_argument(
         "--auto-subcribe",
@@ -1997,7 +2069,7 @@ def main():
         dest="auto_subscribe",
         action="store_true",
         default=False,
-        help="Tự động bấm Subscribe/Resubscribe khi xác minh đúng gói dùng thử 0đ (mặc định: tắt)",
+        help="Automatically click Subscribe/Resubscribe once $0.00 trial is strictly verified (default: off)",
     )
     a = ap.parse_args()
 
@@ -2062,7 +2134,21 @@ def main():
         (REPORT_DIR / f"{email.split('@')[0]}.json").write_text(
             json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        print(f"   Kết quả: {rec.get('status')}")
+        print(f"   Result: {rec.get('status')}")
+        if a.list and rec.get("offers"):
+            print("\n" + "=" * 90)
+            print(f"  ELIGIBLE OFFERS FOR ACCOUNT: {email}")
+            print("=" * 90)
+            for o in rec["offers"]:
+                micros = str(o.get("micros", ""))
+                price = "FREE ($0.00)" if micros == "0" else f"${int(micros)/1_000_000:.2f}"
+                period = o.get("period", "")
+                prod = o.get("product", "")
+                oid = o.get("id", "")
+                print(f"  • [{prod}] {oid:<25} | {price:>14} | {period}")
+                if micros == "0" and o.get("token"):
+                    print(f"    └─ Token ($0.00): {o.get('token')[:45]}...")
+            print("=" * 90)
 
     print("\n" + "=" * 56)
     print("  Tổng kết")

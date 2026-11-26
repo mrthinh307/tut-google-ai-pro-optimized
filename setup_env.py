@@ -1,12 +1,12 @@
-"""setup_env.py —— chuẩn bị môi trường chạy chỉ bằng một chạm (Python + frida + adb + kết nối giả lập)
+"""setup_env.py —— One-click environment preparation (Python + Frida + ADB + Emulator Connection)
 
-Làm 4 việc:
-  1. Kiểm tra phiên bản Python
-  2. Cài frida 16.5.9 (bắt buộc để inject script; 17.x đã bỏ Java bridge, không dùng được)
-  3. Tìm adb: biến môi trường → PATH → MuMu đi kèm → không có thì tự tải platform-tools
-  4. Kết nối giả lập rồi chạy tự kiểm tra bằng ultra0.py --check
+Performs 4 key tasks:
+  1. Validates Python version (3.10+ recommended)
+  2. Installs Frida 16.5.9 (required for scripting injection; 17.x deprecated Java bridge)
+  3. Locates ADB: environment variable → PATH → bundled MuMu ADB → auto-downloads platform-tools if missing
+  4. Connects to emulator and runs self-test via ultra0.py --check
 
-Cách dùng: bấm đúp Cai_dat_moi_truong.bat, hoặc python setup_env.py
+Usage: Double-click setup_environment.bat or run: python setup_env.py
 """
 
 import os
@@ -56,26 +56,26 @@ def die(msg):
 
 
 def check_python():
-    step("Kiểm tra Python")
+    step("Checking Python version")
     v = sys.version_info
     print(f"   {platform.python_version()}  ({platform.architecture()[0]})")
     if v < (3, 9):
         die(
-            "Phiên bản Python quá thấp, hãy cài 3.10 trở lên: https://www.python.org/downloads/"
+            "Python version is too old. Please install 3.10 or higher: https://www.python.org/downloads/"
         )
-    ok("Python dùng được")
+    ok("Python environment is compatible")
 
 
 def install_frida():
-    step("Cài frida 16.5.9 (bắt buộc để inject)")
+    step("Installing Frida 16.5.9 (required for injection)")
     try:
         import frida
 
         if frida.__version__.startswith("16."):
-            ok(f"Đã cài frida {frida.__version__}")
+            ok(f"Frida {frida.__version__} is already installed")
             return
         warn(
-            f"Hiện đang là frida {frida.__version__}, 17.x không dùng được, đang hạ cấp…"
+            f"Currently running Frida {frida.__version__} (17.x is incompatible). Downgrading to 16.5.9..."
         )
     except Exception:
         pass
@@ -89,7 +89,7 @@ def install_frida():
             "install",
             "--no-cache-dir",
             "-i",
-            "https://pypi.tuna.tsinghua.edu.cn/simple",
+            "https://pypi.org/simple",
             "frida==16.5.9",
         ],
     ]
@@ -101,18 +101,17 @@ def install_frida():
         print("   " + (r.stderr or r.stdout).strip().splitlines()[-1][:160])
     try:
         import importlib
-
         import frida
 
         importlib.reload(frida)
-        ok(f"Đã cài xong frida {frida.__version__}")
+        ok(f"Frida {frida.__version__} installed successfully")
     except Exception as e:
-        die(f"Cài frida thất bại: {e}\n   Chạy tay: pip install frida==16.5.9")
+        die(f"Frida installation failed: {e}\n   Try running manually: pip install frida==16.5.9")
 
 
 def download_platform_tools():
     dest = BASE / "platform-tools"
-    print(f"   Tải platform-tools về {dest}")
+    print(f"   Downloading platform-tools to {dest}")
     tmp = Path(tempfile.gettempdir()) / "platform-tools.zip"
     with (
         urllib.request.urlopen(PLATFORM_TOOLS_URL, timeout=180) as r,
@@ -124,31 +123,31 @@ def download_platform_tools():
     tmp.unlink(missing_ok=True)
     adb = dest / "adb.exe"
     if adb.exists():
-        ok(f"platform-tools đã sẵn sàng: {adb}")
+        ok(f"platform-tools ready: {adb}")
         return str(adb)
-    die("Giải nén platform-tools xong mà không thấy adb.exe")
+    die("Failed to find adb.exe after extracting platform-tools")
 
 
 def find_adb():
-    step("Tìm adb")
+    step("Locating ADB binary")
     for c in ADB_CANDIDATES:
         if not c:
             continue
         if c in ("adb", "adb.exe"):
             continue
         if Path(c).exists():
-            ok(f"Dùng {c}")
+            ok(f"Using {c}")
             return c
     w = shutil.which("adb")
     if w:
-        ok(f"Dùng {w} trong PATH")
+        ok(f"Using {w} from system PATH")
         return w
-    warn("Không tìm thấy adb, bắt đầu tải tự động")
+    warn("No existing ADB found. Auto-downloading Google platform-tools...")
     return download_platform_tools()
 
 
 def connect_emulator(adb):
-    step("Kết nối giả lập")
+    step("Connecting to emulator")
     ports = ["16384", "7555", "16416", "21503", "62001"]
     for p in ports:
         subprocess.run(
@@ -163,16 +162,16 @@ def connect_emulator(adb):
     devices = [l.split("\t")[0] for l in out.splitlines()[1:] if "\tdevice" in l]
     if not devices:
         warn(
-            "Chưa kết nối được thiết bị nào. Hãy chắc chắn MuMu đã khởi động và đã bật gỡ lỗi ADB trong Cài đặt"
+            "No devices connected yet. Please ensure your emulator (e.g. MuMu) is launched with ADB debugging enabled in Settings."
         )
         print("   " + out.strip().replace("\n", "\n   "))
         return None
-    ok(f"Đã kết nối: {', '.join(devices)}")
+    ok(f"Connected devices: {', '.join(devices)}")
     return devices[0]
 
 
 def run_check(adb, serial):
-    step("Chạy tự kiểm tra môi trường (ultra0.py --check)")
+    step("Running environment self-test (ultra0.py --check)")
     env = dict(os.environ)
     env["ADB_PATH"] = adb
     env["PYTHONIOENCODING"] = "utf-8"
@@ -190,7 +189,7 @@ def run_check(adb, serial):
 
 def main():
     print("=" * 60)
-    print("  Google Ultra / Pro mở bằng một chạm · Cài đặt môi trường")
+    print("  Google Ultra / Pro One-Click Environment Setup")
     print("=" * 60)
     check_python()
     install_frida()
@@ -202,15 +201,15 @@ def main():
         print("\n" + "=" * 60)
         if good:
             print(
-                "  ✅ Môi trường đã sẵn sàng, có thể bấm đúp «2_Pro_12_thang_Buoc_1.bat» để bắt đầu mở gói"
+                "  ✅ Environment is ready! Double-click «12months-eft.bat» to begin."
             )
         else:
             print(
-                "  ⚠️  Tự kiểm tra chưa đạt hết, xem gợi ý ở trên để xử lý (thường là do Cửa hàng Play chưa mở lên)"
+                "  ⚠️  Self-test warnings detected. Review hints above (ensure Google Play Store is open)."
             )
         print("=" * 60)
     else:
-        print("\nCài xong MuMu và bật gỡ lỗi ADB rồi chạy lại script này một lần nữa.")
+        print("\nPlease launch your emulator, enable ADB debugging in Settings, and re-run this script.")
 
 
 if __name__ == "__main__":
